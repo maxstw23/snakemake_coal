@@ -1,0 +1,7 @@
+/.snakemake
+/.vscode
+/debug
+/logs
+/plots
+/result
+/temp
