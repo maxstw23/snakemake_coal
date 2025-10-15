@@ -1,0 +1,32 @@
+# energies to analyze
+energies: [7p7GeV, 9p2GeV, 11p5GeV, 14p6GeV, 17p3GeV, 19p6GeV, 27GeV, isobar_Ru, isobar_Zr]
+# Event plane method
+EPD_method: 
+  {7p7GeV: 1st, 9p2GeV: 1st, 11p5GeV: 1st, 14p6GeV: 2nd, 17p3GeV: 1st, 19p6GeV: 1st, 27GeV: 1st, isobar_Zr: 2nd, isobar_Ru: 2nd}
+# eta cut (actually rapidity) for particles
+eta_cut: 0.6
+# whether to use mT instead of pT
+use_mT: 0
+# whether to correct for TPC efficiency (for comparison with previous results)
+correct_eff: 1
+# pt cut for particles used in fitting TPC efficiency
+pt_fit_lo: 
+  {7p7GeV: 0.15, 9p2GeV: 0.15, 11p5GeV: 0.15, 14p6GeV: 0.15, 17p3GeV: 0.15, 19p6GeV: 0.15, 27GeV: 0.15, isobar_Zr: 0.15, isobar_Ru: 0.15}
+pt_fit_hi: 
+  {7p7GeV: 3,    9p2GeV: 0.3,  11p5GeV: 0.3,  14p6GeV: 3,    17p3GeV: 3,    19p6GeV: 3,    27GeV: 3,    isobar_Zr: 3,    isobar_Ru: 3}
+# pt/nq cut for integrated v2
+ptnq_lo: 
+  {7p7GeV: 0.08, 9p2GeV: 0.08, 11p5GeV: 0.08, 14p6GeV: 0.08, 17p3GeV: 0.08, 19p6GeV: 0.08, 27GeV: 0.08, isobar_Zr: 0.08, isobar_Ru: 0.08}
+ptnq_hi: 
+  {7p7GeV: 0.6,  9p2GeV: 0.6,  11p5GeV: 0.6,  14p6GeV: 0.6,  17p3GeV: 0.6,  19p6GeV: 0.6,  27GeV: 0.6,  isobar_Zr: 0.6,  isobar_Ru: 0.6}
+
+# configuration for plotting
+plotting:
+  yrange_strategy: manual # auto or manual
+  yrange_lo:
+    {7p7GeV: 0.6, 9p2GeV: 0.6, 11p5GeV: 0.6, 14p6GeV: 0.6, 17p3GeV: 0.6, 19p6GeV: 0.6, 27GeV: 0.6, isobar_Zr: 0.6, isobar_Ru: 0.6}
+  yrange_hi:
+    {7p7GeV: 1.4, 9p2GeV: 1.4, 11p5GeV: 1.4, 14p6GeV: 1.4, 17p3GeV: 1.4, 19p6GeV: 1.4, 27GeV: 1.4, isobar_Zr: 1.4, isobar_Ru: 1.4}
+
+
+
