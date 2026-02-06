@@ -540,7 +540,7 @@ def plot_energy_dep_lambda(dict_input, figs, paper_plots_path):
         data_dict = yaml.load(f, Loader=yaml.CLoader)
         x_label = data_dict['merged']['x_label']
     
-    mask = {'EPD': [14.6]}
+    mask = {'EPD': [11.5, 14.6]}
     
     for EP in ['TPC', 'EPD']:
         for is_horizontal in [False, True]:
@@ -568,21 +568,22 @@ def plot_energy_dep_lambda(dict_input, figs, paper_plots_path):
                         delta_p[j] = ufloat(data_dict_proton['merged']['y'][i], data_dict_proton['merged']['y_err'][i])
                         delta_pmk[j] = delta_p[j] - ufloat(data_dict_kaon['merged']['y'][i], data_dict_kaon['merged']['y_err'][i])
 
-                datapoints_lambda = DataPoint(unumpy.nominal_values(delta_lambda), unumpy.std_devs(delta_lambda))
-                datapoints_pmk = DataPoint(unumpy.nominal_values(delta_pmk), unumpy.std_devs(delta_pmk))
-                datapoints_p = DataPoint(unumpy.nominal_values(delta_p), unumpy.std_devs(delta_p))
-                chi2ndf_2 = calculate_chi2_per_ndf(datapoints_lambda - datapoints_p, DataPoint(np.zeros(len(datapoints_lambda))), nparams=0)
-                chi2ndf_1 = calculate_chi2_per_ndf(datapoints_lambda - datapoints_pmk, DataPoint(np.zeros(len(datapoints_lambda))), nparams=0)
+                # masking
                 energy_str = [f.split('/')[-2].split('_')[1].replace('p', '.') for f in resfiles]
                 energy_float = np.array([float(e.replace('GeV', '')) for e in energy_str])
-
-                # masking
                 current_mask = np.where(np.array([energy_float[energy_index] not in mask.get(EP, []) for energy_index in range(len(files_lambda))]))[0]
+                print(f'Energy mask for {cen_group} {EP}: {energy_float[current_mask]}')
                 delta_lambda = delta_lambda[current_mask]
                 delta_pmk = delta_pmk[current_mask]
                 delta_p = delta_p[current_mask]
                 energy_float = energy_float[current_mask]
 
+                datapoints_lambda = DataPoint(unumpy.nominal_values(delta_lambda), unumpy.std_devs(delta_lambda))
+                datapoints_pmk = DataPoint(unumpy.nominal_values(delta_pmk), unumpy.std_devs(delta_pmk))
+                datapoints_p = DataPoint(unumpy.nominal_values(delta_p), unumpy.std_devs(delta_p))
+                chi2ndf_2 = calculate_chi2_per_ndf(datapoints_lambda - datapoints_p, DataPoint(np.zeros(len(datapoints_lambda))), nparams=0)
+                chi2ndf_1 = calculate_chi2_per_ndf(datapoints_lambda - datapoints_pmk, DataPoint(np.zeros(len(datapoints_lambda))), nparams=0)
+                
                 shift = 0.2 # multiply or divide by 1.5
                 if x_label[i] == '40-80%':
                     ax_dep[i].errorbar(energy_float[1:] + shift, unumpy.nominal_values(delta_lambda[1:]), unumpy.std_devs(delta_lambda[1:]), **plot_config['Lambda'])
@@ -600,6 +601,8 @@ def plot_energy_dep_lambda(dict_input, figs, paper_plots_path):
                 ax_dep[i].tick_params(labelsize=fs-5)
                 ax_dep[i].set_xlim(5, 30)
                 ax_dep[i].set_ylim(-0.0149, 0.0499)
+                if EP == 'EPD':
+                    ax_dep[i].set_ylim(-0.0249, 0.0699)
                 lb, rb = ax_dep[i].get_xlim()
                 ax_dep[i].hlines(0, lb, rb, color='black', linestyle='--')
             

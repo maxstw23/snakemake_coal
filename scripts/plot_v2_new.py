@@ -283,6 +283,21 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         fig_proton2.savefig(f'{outputDir}/coal_proton2_{EP}.pdf')
         with open(f'{outputDir}/coal_proton2_{EP}.yaml', 'w') as f:
             yaml.dump({'x': cen, 'y': unumpy.nominal_values(ratio), 'yerr': unumpy.std_devs(ratio)}, f, default_flow_style=False)
+
+        # chat-gpt derived ratio
+        fig_x, ax_x = plt.subplots(1, 1, figsize=(8, 6))
+        numerator = proton_v2 + 2 * antiproton_v2 - piminus_v2 - 2 * piplus_v2
+        denominator = 4 * piplus_v2 + 2 * piminus_v2 - 2 * proton_v2 - antiproton_v2
+        ratio = numerator / denominator
+        ax_x.errorbar(cen, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), fmt='o', ls='none', label=EP)
+        ax_x.set_xlabel('Centrality (%)', fontsize=16)
+        ax_x.set_ylabel('Ratio', fontsize=16)
+        lb, rb = ax_x.get_xlim()
+        # ax_x.set_ylim(0.6, 1.5)
+        ax_x.hlines(1, lb, rb, color='C1')
+        fig_x.savefig(f'{outputDir}/emfield_d_u_{EP}.pdf')
+        with open(f'{outputDir}/emfield_d_u_{EP}.yaml', 'w') as f:
+            yaml.dump({'x': cen, 'y': unumpy.nominal_values(ratio), 'yerr': unumpy.std_devs(ratio)}, f, default_flow_style=False)
             
     # v2 vs pT stuff
     delta_IdPar_v2 = {}
