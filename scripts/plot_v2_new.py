@@ -103,14 +103,32 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
     for i, EP in enumerate(['TPC', 'EPD']):
         resolution = unumpy.uarray(df_res[f'{EP}_res'].values, df_res[f'{EP}_res_err'].values)
         piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution
+        piplus_counts = df[f'piplus_counts'].values
         piminus_v2 = unumpy.uarray(df[f'piminus_v2_{EP}'].values, df[f'piminus_v2_err_{EP}'].values) / resolution
+        piminus_counts = df[f'piminus_counts'].values
         proton_v2 = unumpy.uarray(df[f'proton_v2_{EP}'].values, df[f'proton_v2_err_{EP}'].values) / resolution
+        proton_counts = df[f'proton_counts'].values
         antiproton_v2 = unumpy.uarray(df[f'antiproton_v2_{EP}'].values, df[f'antiproton_v2_err_{EP}'].values) / resolution
+        antiproton_counts = df[f'antiproton_counts'].values
         x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])  
         x_edges = np.array([80., 70., 60., 50., 40., 30., 20., 10., 5., 0.])
         x_original = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])
         x = unumpy.uarray(x, np.ones_like(x))
         energy = energy.replace('p', '.')
+
+        # merge certain cen bins for final measurments (not for the cen-dependent plots)
+        cen_bins_correspondence = {'0-10%': np.array([8,9]), '10-40%': np.array([5,6,7]), '40-80%': np.array([1,2,3,4])}
+        piplus_v2_merged = {}
+        piminus_v2_merged = {}
+        antiproton_v2_merged = {}
+        for cb in cen_bins_correspondence.keys():
+            piplus_v2_merged[cb] = ufloat(-999, 999)
+            piminus_v2_merged[cb] = ufloat(-999, 999)
+            antiproton_v2_merged[cb] = ufloat(-999, 999)
+            if EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
+                piplus_v2_merged[cb] = np.sum(piplus_v2[cen_bins_correspondence[cb]-1] * piplus_counts[cen_bins_correspondence[cb]-1]) / np.sum(piplus_counts[cen_bins_correspondence[cb]-1])
+                piminus_v2_merged[cb] = np.sum(piminus_v2[cen_bins_correspondence[cb]-1] * piminus_counts[cen_bins_correspondence[cb]-1]) / np.sum(piminus_counts[cen_bins_correspondence[cb]-1])
+                antiproton_v2_merged[cb] = np.sum(antiproton_v2[cen_bins_correspondence[cb]-1] * antiproton_counts[cen_bins_correspondence[cb]-1]) / np.sum(antiproton_counts[cen_bins_correspondence[cb]-1])
 
         if energy in merged_bins:
             if EP in merged_bins[energy]:
@@ -210,6 +228,11 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         # ratio = pim_subtracted_unc / pip_subtracted_unc
         ratio = pim_subtracted / pip_subtracted
         # ratio = (piminus_v2 - piplus_v2) / (piplus_v2 - antiproton_v2 * 2. / 3.) + 1
+        ratio_merged = {}
+        for cb in cen_bins_correspondence.keys():
+            ratio_merged[cb] = ufloat(-999, 999)
+            if EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
+                ratio_merged[cb] = (piminus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.) / (piplus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.)
 
         ax_coal[2].errorbar(cen, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), fmt='o', ls='none',
                             label=r'$\frac{v_2^{\pi^-}-2v_2^{\bar{u}}}{v_2^{\pi^+}-2v_2^{\bar{u}}}$')
@@ -239,7 +262,12 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         plt.tight_layout()
         fig_coal.savefig(f'{outputDir}/coal_{EP}.pdf')
         with open(f'{outputDir}/coal_{EP}.yaml', 'w') as f:
-            yaml.dump({'x': cen, 'y': unumpy.nominal_values(ratio), 'yerr': unumpy.std_devs(ratio)}, f, default_flow_style=False)
+            yaml.dump({'x': cen, 
+                       'y': unumpy.nominal_values(ratio), 'yerr': unumpy.std_devs(ratio),
+                       'y_010': unumpy.nominal_values(ratio_merged['0-10%']), 'yerr_010': unumpy.std_devs(ratio_merged['0-10%']),
+                       'y_1040': unumpy.nominal_values(ratio_merged['10-40%']), 'yerr_1040': unumpy.std_devs(ratio_merged['10-40%']),
+                       'y_4080': unumpy.nominal_values(ratio_merged['40-80%']), 'yerr_4080': unumpy.std_devs(ratio_merged['40-80%']),
+                      }, f, default_flow_style=False)
 
         # delta pion
         delta_pion = piminus_v2 - piplus_v2

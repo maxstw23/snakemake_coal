@@ -9,7 +9,7 @@ import uproot
 energies = config['energies']
 # grab files of the form result*_{energy}.root
 data_files = {'0': {energy: sorted(glob.glob(f'data/result*_{energy}.root'), key=lambda x: int(re.search(r'\d+', x).group()))[-1] for energy in energies}}
-data_files.update({str(sys_tag): {energy: sorted(glob.glob(f'data/sys_tag_{sys_tag}/result*_{energy}.root'), key=lambda x: int(re.search(r'\d+', x).group()))[-1] for energy in []} for sys_tag in [1,2,3]})
+data_files.update({str(sys_tag): {energy: sorted(glob.glob(f'data/sys_tag_{sys_tag}/result*_{energy}.root'), key=lambda x: int(re.search(r'\d+', x).group()))[-1] for energy in energies} for sys_tag in [1,2]})
 
 # check whether the data files contain 2D histograms
 use_2D = {energy: 1 if 'hpiplus_EPD_v2_y_pt_1;1' in uproot.open(data_files['0'][energy]).keys() else 0 for energy in energies}
@@ -193,10 +193,10 @@ rule v2_no_eff_correction_special_sys:
 
 rule plot_v2:
     input: data_points='result/sys_tag_{sys_tag}/energy_{energy}/v2_noeff_corrected.csv',
-           data_points_lambda='result/sys_tag_{sys_tag}/energy_{energy}/fit_Lambda_v2_EPD.csv',
-           data_points_lambdabar='result/sys_tag_{sys_tag}/energy_{energy}/fit_Lambdabar_v2_EPD.csv',
-           data_points_lambda_TPC='result/sys_tag_{sys_tag}/energy_{energy}/fit_Lambda_v2_TPC.csv',
-           data_points_lambdabar_TPC='result/sys_tag_{sys_tag}/energy_{energy}/fit_Lambdabar_v2_TPC.csv',
+           data_points_lambda='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_EPD.csv',
+           data_points_lambdabar='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_EPD.csv',
+           data_points_lambda_TPC='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_TPC.csv',
+           data_points_lambdabar_TPC='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_TPC.csv',
            script='scripts/plot_v2_new.py',
            resolution='result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv'
     output: 'plots/sys_tag_{sys_tag}/energy_{energy}/coal_TPC.pdf',
@@ -220,12 +220,16 @@ rule plot_v2:
 
 rule plot_v2_special_sys:
     input: data_points='result/special_sys_tag_{sys_tag}/energy_{energy}/v2_noeff_corrected.csv',
+           data_points_lambda='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_EPD.csv',
+           data_points_lambdabar='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_EPD.csv',
+           data_points_lambda_TPC='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_TPC.csv',
+           data_points_lambdabar_TPC='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_TPC.csv',
            script='scripts/plot_v2_new.py',
            resolution='result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv'
     output: 'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_TPC.pdf',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_EPD.pdf',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_combined.pdf',
-            'plots/special_sys_tag_{sys_tag}/energy_{energy}/delta_pion_EPD.pdf',
+            'plots/special_sys_tag_{sys_tag}/energy_{energy}/delta_pion.pdf',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_TPC.yaml',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_EPD.yaml',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/delta_pion.yaml',
@@ -238,7 +242,7 @@ rule plot_v2_special_sys:
     log: stdout='logs/special_sys_tag_{sys_tag}/energy_{energy}/plot_v2_eff_correction.log', stderr='logs/special_sys_tag_{sys_tag}/energy_{energy}/plot_v2_eff_correction.err'
     shell:
         """
-        python {input.script} '{input.data_points}' '{input.resolution}' 'plots/special_sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}/' '{wildcards.energy}' {params.yrange_lo} {params.yrange_hi} > {log.stdout} 2> {log.stderr}       
+        python {input.script} '{input.data_points}' '{input.data_points_lambda}' '{input.data_points_lambdabar}' '{input.resolution}' 'plots/special_sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}/' '{wildcards.energy}' {params.yrange_lo} {params.yrange_hi} > {log.stdout} 2> {log.stderr}
         """
 
 rule plot_isobar:
@@ -271,17 +275,39 @@ rule blank:
     shell: 'touch {output}'
 
 rule combine_sys:
-    input: script='scripts/combine_sys.py',
-           default='plots/sys_tag_0/energy_{energy}/coal_{EP_method}.yaml',
-           regular_sys='result/blank/{energy}.txt', 
-           special_sys=lambda wildcards: expand('plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_{EP_method}.yaml', sys_tag=[5], energy=wildcards.energy, EP_method=wildcards.EP_method)
-    output: 'plots/final/energy_{energy}/coal_{EP_method}.yaml'
-    log: stdout='logs/combine_sys_{energy}_{EP_method}.log', stderr='logs/combine_sys_{energy}_{EP_method}.err'
+    input: 
+        script='scripts/combine_sys.py',
+        default='plots/sys_tag_0/energy_{energy}/coal_{EP_method}.yaml',
+        regular_sys=lambda wildcards: expand(
+            'plots/sys_tag_{sys_tag}/energy_{energy}/coal_{EP_method}.yaml', 
+            sys_tag=[1,2], energy=wildcards.energy, EP_method=wildcards.EP_method
+        ),
+        special_sys=lambda wildcards: expand(
+            'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_{EP_method}.yaml', 
+            sys_tag=[], energy=wildcards.energy, EP_method=wildcards.EP_method
+        )
+    output: 
+        'plots/final/energy_{energy}/coal_{EP_method}.yaml'
+    log: 
+        stdout='logs/combine_sys_{energy}_{EP_method}.log', 
+        stderr='logs/combine_sys_{energy}_{EP_method}.err'
+    params:
+        # These lambdas prevent "hanging flags" by only adding the flag if files exist
+        reg_args = lambda wildcards, input: f"--regular_sys {input.regular_sys}" if input.regular_sys else "",
+        spec_args = lambda wildcards, input: f"--special_sys {input.special_sys}" if input.special_sys else ""
     shell:
-        'python {input.script} --default {input.default} --regular_sys {input.regular_sys} --special_sys {input.special_sys} --output {output} --energy {wildcards.energy} > {log.stdout} 2> {log.stderr}'
+        """
+        python {input.script} \
+            --default {input.default} \
+            {params.reg_args} \
+            {params.spec_args} \
+            --output {output} \
+            --energy {wildcards.energy} \
+            > {log.stdout} 2> {log.stderr}
+        """
 
 rule fit_lambda:
-    input: data_file=lambda wildcards: data_files['0'][wildcards.energy],
+    input: data_file=lambda wildcards: data_files[wildcards.sys_tag][wildcards.energy],
            script='scripts/fit_v2.py',
     output: data_points='result/sys_tag_{sys_tag}/energy_{energy}/fit_{particle}_v2_{EP}.csv',
     params: 
@@ -296,13 +322,13 @@ rule fit_lambda:
 
 rule generate_paper_plots:
     input: script='scripts/generate_paper_plots.py',
-           res=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv', energy=energies[:-2]), # ['7p7GeV', '14p6GeV', '19p6GeV', '27GeV']),
-           ratio=expand('plots/sys_tag_0/energy_{energy}/coal_{EP_method}.yaml', energy=energies[:-2], EP_method=['TPC', 'EPD']),
-           delta_v2=expand('plots/sys_tag_0/energy_{energy}/lambda_delta_v2_{EP_method}.yaml', energy=energies[:-2], EP_method=['TPC', 'EPD']),
+           res=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv', energy=energies), # ['7p7GeV', '14p6GeV', '19p6GeV', '27GeV']),
+           ratio=expand('plots/final/energy_{energy}/coal_{EP_method}.yaml', energy=energies, EP_method=['TPC', 'EPD']),
+           delta_v2=expand('plots/sys_tag_0/energy_{energy}/lambda_delta_v2_{EP_method}.yaml', energy=energies, EP_method=['TPC', 'EPD']),
            delta_v2_isobar=expand('plots/sys_tag_0/energy_{energy}/pi_delta_v2_{EP_method}.yaml', energy=['isobar_Ru', 'isobar_Zr'], EP_method=['TPC', 'EPD']),
            # v2=expand('result/final/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
            # v2=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
-           v2=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies[:-2]),
+           v2=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
            v2_eff=expand('result/sys_tag_0/energy_{energy}/v2_eff_corrected.csv', energy=['7p7GeV', '14p6GeV', '19p6GeV', '27GeV'])
     output: 'plots/final/report.pdf'
     log: stdout='logs/generate_paper_plots.log', stderr='logs/generate_paper_plots.err'

@@ -202,14 +202,10 @@ def plot_ratio(dict_input, figs, paper_plot_path):
     # note, these are the bins after merging
     # masked_bins = {'9.2GeV': {'EPD': [1]}}
     masked_bins = {}
-    
-    # remove isobar files
-    files = [f for f in dict_input['v2'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
-    resfiles = [f for f in dict_input['res'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
 
     files = {}
     for EP in ['TPC', 'EPD']:
-        files[EP] = [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP)]
+        files[EP] = [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')]
 
     fig_coal = plt.figure(figsize=(16, 8))
     gs_coal = fig_coal.add_gridspec(ncols=4, nrows=2, hspace=0.0, wspace=0.0)
@@ -222,10 +218,14 @@ def plot_ratio(dict_input, figs, paper_plot_path):
             with open(files[EP][i], 'r') as f:
                 data_dict = yaml.load(f, Loader=yaml.CLoader)
             x = np.array(data_dict['x'])
-            ratio = unumpy.uarray(data_dict['y'], data_dict['yerr'])
+            ratio = unumpy.uarray(data_dict['y'], data_dict['yerr_stat'])
+            err_sys = np.array(data_dict['yerr_sys'])
 
             shift = 1. if EP == 'TPC' else -1.
             ax_coal[i].errorbar(x+shift, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), **marker_styles[EP])
+            for j in range(len(x)):
+                ax_coal[i].fill_between(np.array([x[j]-0.5, x[j]+0.5])+shift, 
+                                        unumpy.nominal_values(ratio)[j]-err_sys[j], unumpy.nominal_values(ratio)[j]+err_sys[j], color=marker_styles[EP]['color'], alpha=0.3)
             ax_coal[i].annotate(r'AuAu, $\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.85, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='right')
             ax_coal[i].set_xlim(-5, 85)
             lb, rb = ax_coal[i].get_xlim()
@@ -363,6 +363,7 @@ def plot_ratio_one_energy(dict_input, figs, paper_plot_path):
     gs_coal = fig_coal.add_gridspec(ncols=1, nrows=1, hspace=0.0, wspace=0.0)
     ax_coal = gs_coal.subplots(sharex='col', sharey='row')
     ax_coal = [ax_coal]
+    lb, rb = ax_coal[0].get_xlim()
     for i, (f, fres) in enumerate(zip(files, resfiles)):
         df = pd.read_csv(f)
         df_res = pd.read_csv(fres)
@@ -460,53 +461,42 @@ def plot_ratio_one_energy(dict_input, figs, paper_plot_path):
 
 def plot_energy_dep(dict_input, figs, paper_plots_path):
     # remove isobar files
-    files = [f for f in dict_input['v2'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
-    resfiles = [f for f in dict_input['res'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
+    files = {}
+    for EP in ['TPC', 'EPD']:
+        files[EP] = [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')]
     fig_dep, ax_dep = plt.subplots(figsize=(8, 6))
 
-    ratio_1040_TPC = np.zeros(len(files)) * ufloat(0, 0)
-    ratio_1040_EPD = np.zeros(len(files)) * ufloat(0, 0)
+    ratio_1040 = {}
+    ratio_1040['TPC'] = np.zeros(len(files['TPC'])) * ufloat(0, 0)
+    ratio_1040['EPD'] = np.zeros(len(files['EPD'])) * ufloat(0, 0)
+    err_sys_1040 = {}
+    err_sys_1040['TPC'] = np.zeros(len(files['TPC']))
+    err_sys_1040['EPD'] = np.zeros(len(files['EPD']))
 
-    for i, (f, fres) in enumerate(zip(files, resfiles)):
-        df = pd.read_csv(f)
-        df_res = pd.read_csv(fres)
+    for i, f in enumerate(files['TPC']):
         energy = f.split('/')[-2].split('_')[1].replace('p', '.')
         for EP in ['TPC', 'EPD']:
-            resolution = unumpy.uarray(df_res[f'{EP}_res'].values, df_res[f'{EP}_res_err'].values)
-            piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution
-            piminus_v2 = unumpy.uarray(df[f'piminus_v2_{EP}'].values, df[f'piminus_v2_err_{EP}'].values) / resolution
-            antiproton_v2 = unumpy.uarray(df[f'antiproton_v2_{EP}'].values, df[f'antiproton_v2_err_{EP}'].values) / resolution
-            x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])  
-            x = unumpy.uarray(x, np.ones_like(x))
+            with open(files[EP][i], 'r') as f:
+                data_dict = yaml.load(f, Loader=yaml.CLoader)
+            ratio_1040[EP][i] = ufloat(data_dict['y_1040'], data_dict['yerr_stat_1040'])
+            err_sys_1040[EP][i] = data_dict['yerr_sys_1040']
 
-            # merge 10-40% centralities (35%, 25%, 15%)
-            bins = np.array([5, 6, 7])
-            piminus_sub = piminus_v2 - antiproton_v2 * 2. / 3.
-            piplus_sub = piplus_v2 - antiproton_v2 * 2. / 3.
-            ratio = piminus_sub / piplus_sub
-            # print(f'energy: {energy}, EP: {EP}')
-            # print(ratio)
-            # dict_ratio = {'x': x, 'ratio': ratio}
-            # dict_ratio = merge_helper(dict_ratio, [bins])
-            # dict_delta = {'x': x, 'delta': piminus_v2 - piplus_v2}
-            # dict_delta = merge_helper(dict_delta, [bins])
-            merged_ratio = np.average(unumpy.nominal_values(ratio[bins-1]), weights=1./unumpy.std_devs(ratio[bins-1])**2)
-            merged_ratio_err = np.sqrt(1./np.sum(1./unumpy.std_devs(ratio[bins-1])**2))
 
-            x = unumpy.nominal_values(x)
-            # now, what does the merged 10-40% bin correspond to?
-            if EP == 'TPC':
-                ratio_1040_TPC[i] = ufloat(merged_ratio, merged_ratio_err) # dict_ratio['ratio'][4]
-            else:
-                ratio_1040_EPD[i] = ufloat(merged_ratio, merged_ratio_err) # dict_ratio['ratio'][4]
-    energy_str = [f.split('/')[-2].split('_')[1].replace('p', '.') for f in files ]
+    energy_str = [f.split('/')[-2].split('_')[1].replace('p', '.') for f in files['TPC']]
     energy_float = np.array([float(e.replace('GeV', '')) for e in energy_str])
     # we want to shift the markers to avoid overlap
     # but we are plotting the x-axis in log scale, so we need to shift the markers in log scale
     shift = 0.2 # multiply or divide by 1.5
-    ax_dep.errorbar(energy_float + shift, unumpy.nominal_values(ratio_1040_TPC), unumpy.std_devs(ratio_1040_TPC), fmt='o', label='TPC', capsize=2, ms=8)
+    ax_dep.errorbar(energy_float + shift, unumpy.nominal_values(ratio_1040['TPC']), unumpy.std_devs(ratio_1040['TPC']), fmt='o', label='TPC', capsize=2, ms=8)
+    for j in range(len(energy_float)):
+        ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) + shift, 
+                            unumpy.nominal_values(ratio_1040['TPC'])[j]-err_sys_1040['TPC'][j], unumpy.nominal_values(ratio_1040['TPC'])[j]+err_sys_1040['TPC'][j], color='C0', alpha=0.3)
     # for EPD, show only 14.6 GeV and above
-    ax_dep.errorbar((energy_float - shift)[energy_float >= 14.6], unumpy.nominal_values(ratio_1040_EPD)[energy_float >= 14.6], unumpy.std_devs(ratio_1040_EPD)[energy_float >= 14.6], fmt='o', label='EPD', capsize=2, ms=8)
+    ax_dep.errorbar((energy_float - shift)[energy_float >= 14.6], unumpy.nominal_values(ratio_1040['EPD'])[energy_float >= 14.6], unumpy.std_devs(ratio_1040['EPD'])[energy_float >= 14.6], fmt='o', label='EPD', capsize=2, ms=8)
+    for j in range(len(energy_float)):
+        if energy_float[j] >= 14.6:
+            ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) - shift, 
+                                unumpy.nominal_values(ratio_1040['EPD'])[j]-err_sys_1040['EPD'][j], unumpy.nominal_values(ratio_1040['EPD'])[j]+err_sys_1040['EPD'][j], color='C1', alpha=0.3)
     ax_dep.annotate(r'AuAu, 10-40%', xy=(0.05, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
     ax_dep.set_xlabel(r'$\sqrt{s_{\text{NN}}}$ (GeV)', fontsize=15)
     ax_dep.set_ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=15)
@@ -514,7 +504,7 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     # print results to txt
     with open(paper_plots_path + '/energy_dep.txt', 'w') as f:
         for i, energy in enumerate(energy_str):
-            f.write(f'{energy} {unumpy.nominal_values(ratio_1040_TPC)[i]:.4f} {unumpy.std_devs(ratio_1040_TPC)[i]:.4f} {unumpy.nominal_values(ratio_1040_EPD)[i]:.4f} {unumpy.std_devs(ratio_1040_EPD)[i]:.4f}\n')
+            f.write(f'{energy} {unumpy.nominal_values(ratio_1040["TPC"])[i]:.4f} {unumpy.std_devs(ratio_1040["TPC"])[i]:.4f} {unumpy.nominal_values(ratio_1040["EPD"])[i]:.4f} {unumpy.std_devs(ratio_1040["EPD"])[i]:.4f}\n')
     
     # ax_dep.set_xscale('log')
     ax_dep.set_xticks(energy_float, labels=energy_float)
