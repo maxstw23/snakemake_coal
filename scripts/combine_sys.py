@@ -33,16 +33,17 @@ def main(default, regular_sys, special_sys, output, energy):
         sum_of_unc = 0
         for sys_tag in sys_cut.keys():
             delta = np.abs(default_cut['y'][cent] - sys_cut[sys_tag]['y'][cent])
+            delta_signed = sys_cut[sys_tag]['y'][cent] - default_cut['y'][cent]
             delta_err = np.sqrt(np.abs(sys_cut[sys_tag]['yerr'][cent]**2 - default_cut['yerr'][cent]**2))
             # significance = abs(delta) / delta_err if delta_err != 0 else 0
             significance = (delta_err < delta)
-            print(f'\t{int(sys_tag):<10} {delta:<10.4f} {delta_err:<10.4f} {significance}')
+            print(f'\t{int(sys_tag):<10} {delta_signed:<10.4f} {delta_err:<10.4f} {significance}')
             if significance:
                 sum_of_unc += delta**2 - delta_err**2
-        print(f'\tTotal systematic uncertainty: {np.sqrt(sum_of_unc / 12):.4f}')
-        new_yerr[cent] = np.sqrt(default_cut['yerr'][cent]**2 + sum_of_unc / 12)
+        print(f'\tTotal systematic uncertainty: {np.sqrt(sum_of_unc / 3):.4f}')
+        new_yerr[cent] = np.sqrt(default_cut['yerr'][cent]**2 + sum_of_unc / 3)
         yerr_stat[cent] = default_cut['yerr'][cent]
-        yerr_sys[cent] = np.sqrt(sum_of_unc / 12)
+        yerr_sys[cent] = np.sqrt(sum_of_unc / 3)
 
     # iterate thru the combined centrality bins
     new_yerr_combined = np.zeros(3)
@@ -56,16 +57,17 @@ def main(default, regular_sys, special_sys, output, energy):
         sum_of_unc = 0
         for sys_tag in sys_cut.keys():
             delta = np.abs(default_cut['y_' + cb] - sys_cut[sys_tag]['y_' + cb])
+            delta_signed = sys_cut[sys_tag]['y_' + cb] - default_cut['y_' + cb]
             delta_err = np.sqrt(np.abs(sys_cut[sys_tag]['yerr_' + cb]**2 - default_cut['yerr_' + cb]**2))
             # significance = abs(delta) / delta_err if delta_err != 0 else 0
             significance = (delta_err < delta)
-            print(f'\t{int(sys_tag):<10} {delta:<10.4f} {delta_err:<10.4f} {significance}')
+            print(f'\t{int(sys_tag):<10} {delta_signed:<10.4f} {delta_err:<10.4f} {significance}')
             if significance:
                 sum_of_unc += delta**2 - delta_err**2
-        print(f'\tTotal systematic uncertainty: {np.sqrt(sum_of_unc / 12):.4f}')
-        new_yerr_combined[i] = np.sqrt(default_cut['yerr_' + cb]**2 + sum_of_unc / 12)
+        print(f'\tTotal systematic uncertainty: {np.sqrt(sum_of_unc / 3):.4f}')
+        new_yerr_combined[i] = np.sqrt(default_cut['yerr_' + cb]**2 + sum_of_unc / 3)
         yerr_stat_combined[i] = default_cut['yerr_' + cb]
-        yerr_sys_combined[i] = np.sqrt(sum_of_unc / 12)
+        yerr_sys_combined[i] = np.sqrt(sum_of_unc / 3)
 
     with open(output, 'w') as f:
         # basically use default_cut, but replace yerr with new_yerr

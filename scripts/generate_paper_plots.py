@@ -509,7 +509,7 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     # ax_dep.set_xscale('log')
     ax_dep.set_xticks(energy_float, labels=energy_float)
     ax_dep.set_xlim(5, 30)
-    ax_dep.set_ylim(1.10, 1.2)
+    ax_dep.set_ylim(1.0, 1.3)
     lb, rb = ax_dep.get_xlim()
     ax_dep.hlines(315 / 276, lb, rb, color='C3', linestyle='--', label='315/276')
     # ax_dep.hlines(1, lb, rb, color='C4', linestyle='--', label='1')
