@@ -1,6 +1,7 @@
 from importlib.resources import files
 import matplotlib.pyplot as plt
 import matplotlib.backends.backend_pdf
+from matplotlib.legend_handler import HandlerTuple
 from uncertainties import unumpy, ufloat, core
 import numpy as np
 # import pickle
@@ -18,6 +19,27 @@ from data_point import DataPoint
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 # plt.rcParams['font.weight'] = 'bold'
+
+def eb(ax, x, y, yerr, color, marker='o', ms=8, capsize=2, mfc=None, zorder=2, lw=1.5, min_stub=0.25):
+    """Errorbar with lines clipped to the marker edge so they never cross through it."""
+    mfc_actual = mfc if mfc is not None else color
+    ax.plot(x, y, marker=marker, color=color, mfc=mfc_actual, mec=color,
+            ms=ms, ls='none', zorder=zorder + 1)
+    # Marker radius in data coordinates via axis transform
+    trans = ax.transData
+    y0_px, y1_px = trans.transform([0, ax.get_ylim()[0]])[1], trans.transform([0, ax.get_ylim()[1]])[1]
+    px_per_data = abs(y1_px - y0_px) / (ax.get_ylim()[1] - ax.get_ylim()[0])
+    r = (ms / 2) * (ax.figure.dpi / 72.0) / px_per_data
+    for xi, yi, ei in zip(np.asarray(x), np.asarray(y), np.asarray(yerr)):
+        if np.isnan(yi) or np.isnan(ei) or ei <= 0:
+            continue
+        if ei > (1 + min_stub) * r:
+            ax.plot([xi, xi], [yi + r, yi + ei], color=color, lw=lw, zorder=zorder, solid_capstyle='butt')
+            ax.plot([xi, xi], [yi - ei, yi - r], color=color, lw=lw, zorder=zorder, solid_capstyle='butt')
+            if capsize > 0:
+                ax.plot([xi], [yi + ei], marker='_', color=color, ms=capsize * 3, lw=lw, zorder=zorder)
+                ax.plot([xi], [yi - ei], marker='_', color=color, ms=capsize * 3, lw=lw, zorder=zorder)
+
 
 marker_styles = {
     'TPC':
@@ -93,34 +115,51 @@ def plot_res(dict_input, figs, paper_plots_path):
     gs_res = fig_res.add_gridspec(2, 1, hspace=0.0)
     ax_res = gs_res.subplots(sharex='col', sharey='row')
     ax_res = ax_res.flatten()
-    markers = ['o', 's', 'd', '^', 'v', '<', '>', 'p', 'h', 'H', 'D', 'P', '*', 'X']
-    colors = ['C0', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7']
-    shift_range = 3 # shift the markers to avoid overlap, 2 means +- 0.5% shift
-    for i, f in enumerate(files):
+
+    # filter out isobars and sort by energy
+    _energy_key = lambda f: float(f.split('/')[-2].split('_')[1].replace('p', '.').replace('GeV', ''))
+    res_files = sorted([f for f in files if not f.split('/')[-2].split('_')[1].startswith('isobar')], key=_energy_key)
+
+    # energies that have EPD data in the ratio plot
+    epd_energies = {'14.6GeV', '17.3GeV', '19.6GeV', '27GeV'}
+
+    markers = ['o', 's', 'D', '^', 'v', 'p', '*']
+    colors = [f'C{i}' for i in range(len(res_files))]
+
+    epd_files = [(i, f) for i, f in enumerate(res_files)
+                 if f.split('/')[-2].split('_')[1].replace('p', '.') in epd_energies]
+
+    shift_range = 3
+    n_tpc = len(res_files)
+    n_epd = len(epd_files)
+    x_base = np.array([75, 65, 55, 45, 35, 25, 15, 7.5, 2.5])
+
+    for i, f in enumerate(res_files):
         df = pd.read_csv(f)
         energy = f.split('/')[-2].split('_')[1].replace('p', '.')
-        if energy.startswith('isobar'):
-            continue
         TPC_res = unumpy.uarray(df['TPC_res'].values, df['TPC_res_err'].values)
-        EPD_res = unumpy.uarray(df['EPD_res'].values, df['EPD_res_err'].values)
-        # mask non-physical resolution
-        EPD_mask = unumpy.nominal_values(EPD_res) > 0
-
-        x = np.array([75, 65, 55, 45, 35, 25, 15, 7.5, 2.5])
-        x = x - 0.5 * shift_range + i / (len(files) - 1) * shift_range
+        x = x_base - 0.5 * shift_range + i / (n_tpc - 1) * shift_range
         ax_res[0].errorbar(x, unumpy.nominal_values(TPC_res), unumpy.std_devs(TPC_res), label=energy,
                            fmt=markers[i], capsize=2, ms=8, color=colors[i])
-        if energy == '14.6GeV':
-            continue
+        ax_res[0].plot(x, unumpy.nominal_values(TPC_res), '--', color=colors[i], alpha=0.4)
+
+    for j, (orig_i, f) in enumerate(epd_files):
+        df = pd.read_csv(f)
+        energy = f.split('/')[-2].split('_')[1].replace('p', '.')
+        EPD_res = unumpy.uarray(df['EPD_res'].values, df['EPD_res_err'].values)
+        EPD_mask = unumpy.nominal_values(EPD_res) > 0
+        x = x_base - 0.5 * shift_range + j / max(n_epd - 1, 1) * shift_range
         ax_res[1].errorbar(x[EPD_mask], unumpy.nominal_values(EPD_res[EPD_mask]), unumpy.std_devs(EPD_res[EPD_mask]),
-                           fmt=markers[i], capsize=2, ms=8, color=colors[i])
-    
+                           label=energy, fmt=markers[orig_i], capsize=2, ms=8, color=colors[orig_i])
+        ax_res[1].plot(x[EPD_mask], unumpy.nominal_values(EPD_res[EPD_mask]), '--', color=colors[orig_i], alpha=0.4)
+
     fig_res.add_subplot(111, frameon=False)
     plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
     plt.grid(False)
     plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
     plt.ylabel(r'$\text{Res}(\Psi_{EP})$', fontsize=15, labelpad=20)
     ax_res[0].legend(fontsize=12, frameon=False)
+    ax_res[1].legend(fontsize=12, frameon=False)
     ax_res[0].annotate('(a) TPC', xy=(0.03, 0.94), xycoords='axes fraction', fontsize=15)
     ax_res[1].annotate('(b) EPD', xy=(0.03, 0.94), xycoords='axes fraction', fontsize=15)
     plt.figure(fig_res.number)
@@ -148,36 +187,51 @@ def plot_pion_v2(dict_input, figs, paper_plot_path):
             if EP == 'EPD' and float(energy.replace('GeV', '')) < 14.6:
                 continue
             resolution = unumpy.uarray(df_res[f'{EP}_res'].values, df_res[f'{EP}_res_err'].values)
-            piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution
-            piminus_v2 = unumpy.uarray(df[f'piminus_v2_{EP}'].values, df[f'piminus_v2_err_{EP}'].values) / resolution
-            antiproton_v2 = unumpy.uarray(df[f'antiproton_v2_{EP}'].values, df[f'antiproton_v2_err_{EP}'].values) / resolution
-            x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])  
-            x = unumpy.uarray(x, np.zeros_like(x))
+            res_mask = unumpy.nominal_values(resolution) >= 0.05
+            if energy == '7.7GeV' and EP == 'TPC':
+                res_mask[0] = False  # 70-80% bin has poor statistics at 7.7 GeV
+            piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution / 2
+            piminus_v2 = unumpy.uarray(df[f'piminus_v2_{EP}'].values, df[f'piminus_v2_err_{EP}'].values) / resolution / 2
+            antiproton_v2 = unumpy.uarray(df[f'antiproton_v2_{EP}'].values, df[f'antiproton_v2_err_{EP}'].values) / resolution / 3
+            x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])
 
-            x = unumpy.nominal_values(x)
-            shift_EP = 1. if EP == 'TPC' else -1.
-            shift_par = 0.5
-            color = 'C0' if EP == 'TPC' else 'C1'
-            # piminus marker is filled, piplus marker is not filled
-            ax_coal[i].errorbar(x+shift_EP+shift_par, unumpy.nominal_values(piplus_v2), unumpy.std_devs(piplus_v2), label=r'$\pi^+$', mfc='white', **marker_styles[EP])
-            ax_coal[i].errorbar(x+shift_EP-shift_par, unumpy.nominal_values(piminus_v2), unumpy.std_devs(piminus_v2), label=r'$\pi^-$', **marker_styles[EP])
-            # ax_coal[i].errorbar(x+shift_EP, unumpy.nominal_values(antiproton_v2), unumpy.std_devs(antiproton_v2), label=r'$\bar{p}$', 
-            #                     **{key:val for key, val in marker_styles[EP].items() if key != 'marker'}, marker='d')
+            x = x[res_mask]
+            piplus_v2 = piplus_v2[res_mask]
+            piminus_v2 = piminus_v2[res_mask]
+            antiproton_v2 = antiproton_v2[res_mask]
+            shift_EP = 0.5 if EP == 'TPC' else -0.5
+            shift_par = 1.0
+            mfc = None if EP == 'TPC' else 'none'
+            z = 4 if EP == 'TPC' else 2
+            eb(ax_coal[i], x+shift_par+shift_EP, unumpy.nominal_values(piplus_v2), unumpy.std_devs(piplus_v2),
+               color='C0', marker='o', mfc=mfc, zorder=z)
+            eb(ax_coal[i], x-shift_par+shift_EP, unumpy.nominal_values(piminus_v2), unumpy.std_devs(piminus_v2),
+               color='C3', marker='^', mfc=mfc, zorder=z)
+            eb(ax_coal[i], x+shift_EP, unumpy.nominal_values(antiproton_v2), unumpy.std_devs(antiproton_v2),
+               color='C2', marker='d', mfc=mfc, zorder=z)
             ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
             ax_coal[i].set_xlim(-5, 85)
-            ax_coal[i].set_ylim(0, 0.07)
+            ax_coal[i].set_ylim(-0.005, 0.0349)
             lb, rb = ax_coal[i].get_xlim()
     fig_coal.add_subplot(111, frameon=False)
     plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
     plt.grid(False)
     plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
-    plt.ylabel(r'$v_2$', fontsize=15, labelpad=20)
-    ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0', label=r'$v_{2,\text{TPC}}^{\pi^-}$')
-    ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0', mfc='white', label=r'$v_{2,\text{TPC}}^{\pi^+}$')
-    ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C1', label=r'$v_{2,\text{EPD}}^{\pi^-}$')
-    ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C1', mfc='white', label=r'$v_{2,\text{EPD}}^{\pi^+}$')    
+    plt.ylabel(r'$v_2/n_q$', fontsize=15, labelpad=20)
+    h_auau = ax_coal[7].plot([], [], ' ')[0]
+    h_piplus_tpc = ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0')
+    h_piplus_epd = ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0', mfc='white')
+    h_piminus_tpc = ax_coal[7].errorbar([], [], yerr=[], fmt='^', capsize=2, ms=8, color='C3')
+    h_piminus_epd = ax_coal[7].errorbar([], [], yerr=[], fmt='^', capsize=2, ms=8, color='C3', mfc='white')
+    h_pbar_tpc = ax_coal[7].errorbar([], [], yerr=[], fmt='d', capsize=2, ms=8, color='C2')
+    h_pbar_epd = ax_coal[7].errorbar([], [], yerr=[], fmt='d', capsize=2, ms=8, color='C2', mfc='white')
     ax_coal[7].tick_params(axis='x', which='both', length=0)
-    ax_coal[7].legend(fontsize=15, frameon=False, loc='center')   
+    ax_coal[7].legend(
+        [h_auau, (h_piplus_tpc, h_piplus_epd), (h_piminus_tpc, h_piminus_epd), (h_pbar_tpc, h_pbar_epd)],
+        ['Au+Au', r'$\pi^+$ (TPC/EPD)', r'$\pi^-$ (TPC/EPD)', r'$\bar{p}$ (TPC/EPD)'],
+        handler_map={tuple: HandlerTuple(ndivide=None)},
+        fontsize=15, frameon=False, loc='center'
+    )
 
     plt.figure(fig_coal.number)
     plt.savefig(paper_plot_path + '/pion_v2.pdf')
@@ -204,8 +258,12 @@ def plot_ratio(dict_input, figs, paper_plot_path):
     masked_bins = {}
 
     files = {}
+    _energy_key = lambda f: float(f.split('/')[-2].split('_')[1].replace('p', '.').replace('GeV', ''))
     for EP in ['TPC', 'EPD']:
-        files[EP] = [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')]
+        files[EP] = sorted(
+            [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')],
+            key=_energy_key
+        )
 
     fig_coal = plt.figure(figsize=(16, 8))
     gs_coal = fig_coal.add_gridspec(ncols=4, nrows=2, hspace=0.0, wspace=0.0)
@@ -226,12 +284,11 @@ def plot_ratio(dict_input, figs, paper_plot_path):
             for j in range(len(x)):
                 ax_coal[i].fill_between(np.array([x[j]-0.5, x[j]+0.5])+shift, 
                                         unumpy.nominal_values(ratio)[j]-err_sys[j], unumpy.nominal_values(ratio)[j]+err_sys[j], color=marker_styles[EP]['color'], alpha=0.3)
-            ax_coal[i].annotate(r'AuAu, $\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.85, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='right')
+            ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
             ax_coal[i].set_xlim(-5, 85)
             lb, rb = ax_coal[i].get_xlim()
-            ax_coal[i].set_ylim(0.509, 1.759)
+            ax_coal[i].set_ylim(0.55, 1.649)
             ax_coal[i].hlines(315 / 276, lb, rb, color='C3', label='315/276', linestyle='--')
-            ax_coal[i].hlines(1, lb, rb, color='black', label='1', linestyle='--')
             # ax_coal[i].set_xlim(lb, rb)
         # no Glauber for now
         cen_glauber = np.array([2.5,7.5,15,25,35,45,55,65,75])
@@ -246,14 +303,14 @@ def plot_ratio(dict_input, figs, paper_plot_path):
     plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
     plt.ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=18)
     # plt.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.12)
+    ax_coal[7].plot([], [], ' ', label='Au+Au')
     ax_coal[7].errorbar([], [], yerr=[], label='TPC Event plane', **marker_styles['TPC'])
     ax_coal[7].errorbar([], [], yerr=[], label='EPD Event plane', **marker_styles['EPD'])
     # ax_coal[7].annotate(r'$\bf{STAR}\;\it{Preliminary}$', xy=(0.15, 0.8), xycoords='axes fraction', fontsize=20)
     ax_coal[7].fill_between([], [], [], color='C2', alpha=0.8, label='Glauber d/u')
     ax_coal[7].hlines(999, lb, rb, color='C3', linestyle='--', label='315/276')
-    ax_coal[7].hlines(999, lb, rb, color='black', linestyle='--', label='1')
     # ax_coal[7].tick_params(axis='x', which='both', length=0)
-    ax_coal[7].legend(fontsize=15, frameon=False, loc='center')   
+    ax_coal[7].legend(fontsize=15, frameon=False, loc='center')
 
     # print result to txt
     with open(paper_plot_path + '/ratio.txt', 'w') as file:
@@ -270,8 +327,10 @@ def plot_ratio(dict_input, figs, paper_plot_path):
                     file.write(f'{x[j]:.2f} {unumpy.nominal_values(ratio)[j]:.4f}+-{unumpy.std_devs(ratio)[j]:.4f}\n')
             file.write('\n')
     plt.figure(fig_coal.number)
-    shutil.copyfile(paper_plot_path + '/ratio.pdf', paper_plot_path + '/ratio_old.pdf')
-    plt.savefig(paper_plot_path + '/ratio.pdf')
+    ratio_pdf = paper_plot_path + '/ratio.pdf'
+    if os.path.exists(ratio_pdf):
+        shutil.copyfile(ratio_pdf, paper_plot_path + '/ratio_old.pdf')
+    plt.savefig(ratio_pdf)
     plt.savefig(paper_plot_path + '/ratio.eps', format='eps')
     plt.savefig(paper_plot_path + '/ratio.svg', format='svg', transparent = True, bbox_inches = 'tight', pad_inches = 0)
     figs.append(fig_coal)
@@ -335,6 +394,109 @@ def plot_alternative_ratio(dict_input, figs, paper_plot_path):
     plt.savefig(paper_plot_path + '/alternative_ratio.pdf')
     plt.savefig(paper_plot_path + '/alternative_ratio.eps', format='eps')
     plt.savefig(paper_plot_path + '/alternative_ratio.svg', format='svg', transparent = True, bbox_inches = 'tight', pad_inches = 0)
+    figs.append(figure)
+    plt.close()
+    return figs
+
+def plot_alternative_ratio_integrated(dict_input, figs, paper_plot_path):
+    merged_bins = {
+        '7.7GeV': {'EPD': [7,8,9]},
+         '9.2GeV': {'EPD': [1,2,3]},
+        '11.5GeV': {'EPD': [1,2]},
+        '14.6GeV': {'TPC': [1,2], 'EPD': [1,2]},
+        '17.3GeV': {'TPC': [1,2], 'EPD': [1,2,3]},
+        '19.6GeV': {'TPC': [1,2], 'EPD': [1,2]},
+        '27GeV': {'TPC': [1,2,3], 'EPD': [1,2]},
+    }
+    masked_bins = {}
+
+    files = [f for f in dict_input['v2'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
+    resfiles = [f for f in dict_input['res'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
+
+    figure = plt.figure(figsize=(16, 8))
+    gs = figure.add_gridspec(ncols=4, nrows=2, hspace=0.0, wspace=0.0)
+    ax = gs.subplots(sharex='col', sharey='row')
+    ax = ax.flatten()
+
+    for i, (f, fres) in enumerate(zip(files, resfiles)):
+        df = pd.read_csv(f)
+        df_res = pd.read_csv(fres)
+        energy = f.split('/')[-2].split('_')[1].replace('p', '.')
+        for EP in ['TPC', 'EPD']:
+            resolution = unumpy.uarray(df_res[f'{EP}_res'].values, df_res[f'{EP}_res_err'].values)
+            piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution
+            piminus_v2 = unumpy.uarray(df[f'piminus_v2_{EP}'].values, df[f'piminus_v2_err_{EP}'].values) / resolution
+            proton_v2 = unumpy.uarray(df[f'proton_v2_{EP}'].values, df[f'proton_v2_err_{EP}'].values) / resolution
+            antiproton_v2 = unumpy.uarray(df[f'antiproton_v2_{EP}'].values, df[f'antiproton_v2_err_{EP}'].values) / resolution
+            x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])
+            x = unumpy.uarray(x, np.ones_like(x))
+
+            if energy in merged_bins:
+                if EP in merged_bins[energy]:
+                    bins = merged_bins[energy][EP]
+                    dict_v2 = {'x': x, 'pip': piplus_v2, 'pim': piminus_v2, 'p': proton_v2, 'ap': antiproton_v2}
+                    dict_v2 = merge_helper(dict_v2, [bins])
+                    x = dict_v2['x']
+                    piplus_v2 = dict_v2['pip']
+                    piminus_v2 = dict_v2['pim']
+                    proton_v2 = dict_v2['p']
+                    antiproton_v2 = dict_v2['ap']
+
+            if energy in masked_bins:
+                if EP in masked_bins[energy]:
+                    bins = masked_bins[energy][EP]
+                    for b in bins:
+                        x[b-1] = ufloat(0, 0)
+                        piplus_v2[b-1] = ufloat(0, 0)
+                        piminus_v2[b-1] = ufloat(0, 0)
+                        proton_v2[b-1] = ufloat(0, 0)
+                        antiproton_v2[b-1] = ufloat(0, 0)
+                    mask = unumpy.nominal_values(x) != 0
+                    x = x[mask]
+                    piplus_v2 = piplus_v2[mask]
+                    piminus_v2 = piminus_v2[mask]
+                    proton_v2 = proton_v2[mask]
+                    antiproton_v2 = antiproton_v2[mask]
+
+            x = unumpy.nominal_values(x)
+            delta_p = proton_v2 - antiproton_v2
+            delta_pi = piplus_v2 - piminus_v2
+
+            ratio = np.divide(delta_p - 2. * delta_pi, delta_p + delta_pi, where=unumpy.nominal_values(delta_p + delta_pi)!=0, out=np.zeros_like(delta_p))
+            mask = unumpy.nominal_values(ratio) != 0
+            x_masked = x[mask]
+            ratio = ratio[mask]
+
+            shift = 1. if EP == 'TPC' else -1.
+            ax[i].errorbar(x_masked+shift, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), **marker_styles[EP])
+            ax[i].annotate(r'AuAu, $\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.85, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='right')
+            ax[i].set_xlim(-5, 85)
+            lb, rb = ax[i].get_xlim()
+            ax[i].set_ylim(0.509, 1.759)
+            ax[i].hlines(315 / 276, lb, rb, color='C3', label='315/276', linestyle='--')
+            ax[i].hlines(1, lb, rb, color='black', label='1', linestyle='--')
+        cen_glauber = np.array([2.5,7.5,15,25,35,45,55,65,75])
+        ratio_du = np.array([1.13304,1.13351,1.13777,1.14464,1.15486,1.17016,1.19128,1.22017,1.26102])
+        ratio_du_err = np.array([1.56853e-08,4.95918e-08,9.90949e-08,1.74393e-07,3.19487e-07,5.92654e-07,1.24839e-06,3.09313e-06,5.11625e-06])
+        ratio_upper = ratio_du + ratio_du_err
+        ratio_lower = ratio_du - ratio_du_err
+        ax[i].fill_between(cen_glauber, ratio_lower, ratio_upper, color='C2', alpha=0.8, label='Glauber')
+
+    figure.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.grid(False)
+    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
+    plt.ylabel(r'$\frac{\Delta v_2(p)+2\Delta v_2(\pi)}{\Delta v_2(p)-\Delta v_2(\pi)}$', fontsize=18)
+    ax[7].errorbar([], [], yerr=[], label='TPC Event plane', **marker_styles['TPC'])
+    ax[7].errorbar([], [], yerr=[], label='EPD Event plane', **marker_styles['EPD'])
+    ax[7].fill_between([], [], [], color='C2', alpha=0.8, label='Glauber d/u')
+    ax[7].hlines(999, lb, rb, color='C3', linestyle='--', label='315/276')
+    ax[7].hlines(999, lb, rb, color='black', linestyle='--', label='1')
+    ax[7].legend(fontsize=15, frameon=False, loc='center')
+    plt.figure(figure.number)
+    plt.savefig(paper_plot_path + '/alternative_ratio_integrated.pdf')
+    plt.savefig(paper_plot_path + '/alternative_ratio_integrated.eps', format='eps')
+    plt.savefig(paper_plot_path + '/alternative_ratio_integrated.svg', format='svg', transparent = True, bbox_inches = 'tight', pad_inches = 0)
     figs.append(figure)
     plt.close()
     return figs
@@ -462,8 +624,12 @@ def plot_ratio_one_energy(dict_input, figs, paper_plot_path):
 def plot_energy_dep(dict_input, figs, paper_plots_path):
     # remove isobar files
     files = {}
+    _energy_key = lambda f: float(f.split('/')[-2].split('_')[1].replace('p', '.').replace('GeV', ''))
     for EP in ['TPC', 'EPD']:
-        files[EP] = [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')]
+        files[EP] = sorted(
+            [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')],
+            key=_energy_key
+        )
     fig_dep, ax_dep = plt.subplots(figsize=(8, 6))
 
     ratio_1040 = {}
@@ -497,6 +663,24 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
         if energy_float[j] >= 14.6:
             ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) - shift, 
                                 unumpy.nominal_values(ratio_1040['EPD'])[j]-err_sys_1040['EPD'][j], unumpy.nominal_values(ratio_1040['EPD'])[j]+err_sys_1040['EPD'][j], color='C1', alpha=0.3)
+    # chi2/ndf comparing to expectation 315/276
+    expectation = 315 / 276
+    for EP in ['TPC', 'EPD']:
+        mask = np.ones(len(energy_float), dtype=bool) if EP == 'TPC' else (energy_float >= 14.6)
+        vals = unumpy.nominal_values(ratio_1040[EP])[mask]
+        errs = unumpy.std_devs(ratio_1040[EP])[mask]
+        chi2 = np.sum((vals - expectation)**2 / errs**2)
+        ndf = len(vals)
+        print(f'energy_dep chi2/ndf ({EP} vs 315/276): {chi2:.2f}/{ndf} = {chi2/ndf:.2f}')
+
+    chi2_tpc = np.sum((unumpy.nominal_values(ratio_1040['TPC']) - expectation)**2 / unumpy.std_devs(ratio_1040['TPC'])**2)
+    ndf_tpc = len(ratio_1040['TPC'])
+    mask_epd = energy_float >= 14.6
+    chi2_epd = np.sum((unumpy.nominal_values(ratio_1040['EPD'])[mask_epd] - expectation)**2 / unumpy.std_devs(ratio_1040['EPD'])[mask_epd]**2)
+    ndf_epd = int(np.sum(mask_epd))
+    ax_dep.annotate(fr'TPC $\chi^2$/ndf = {chi2_tpc:.1f}/{ndf_tpc}', xy=(0.05, 0.82), fontsize=13, xycoords='axes fraction')
+    ax_dep.annotate(fr'EPD $\chi^2$/ndf = {chi2_epd:.1f}/{ndf_epd}', xy=(0.05, 0.74), fontsize=13, xycoords='axes fraction')
+
     ax_dep.annotate(r'AuAu, 10-40%', xy=(0.05, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
     ax_dep.set_xlabel(r'$\sqrt{s_{\text{NN}}}$ (GeV)', fontsize=15)
     ax_dep.set_ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=15)
@@ -515,8 +699,10 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     # ax_dep.hlines(1, lb, rb, color='C4', linestyle='--', label='1')
     ax_dep.legend(fontsize=15)
     # make a copy of the plot from the previous iteration
-    shutil.copyfile(paper_plots_path + '/energy_dep.pdf', paper_plots_path + '/energy_dep_old.pdf')
-    plt.savefig(paper_plots_path + '/energy_dep.pdf')
+    energy_dep_pdf = paper_plots_path + '/energy_dep.pdf'
+    if os.path.exists(energy_dep_pdf):
+        shutil.copyfile(energy_dep_pdf, paper_plots_path + '/energy_dep_old.pdf')
+    plt.savefig(energy_dep_pdf)
     plt.savefig(paper_plots_path + '/energy_dep.eps', format='eps')
     plt.savefig(paper_plots_path + '/energy_dep.svg', format='svg')
     figs.append(fig_dep)
@@ -730,6 +916,142 @@ def merge_helper(dict_arr, bin_groups):
         dict_v2[key] = temp    
     return dict_v2
 
+def neutron_skin_alpha_test(dict_input, figs, paper_plot_path):
+    """
+    Per-energy fit of interpolation parameter alpha between flat d/u and Glauber
+    neutron-skin prediction, restricted to 40-80% centrality.
+    Model: R(cen; alpha) = R_flat + alpha * (R_Glauber(cen) - R_flat)
+      alpha=0 -> flat 315/276, alpha=1 -> full Glauber neutron skin.
+    Analytic chi2 minimisation (linear in alpha). Uses stat errors only.
+    """
+    CEN_GLAUBER = np.array([2.5, 7.5, 15, 25, 35, 45, 55, 65, 75])
+    RATIO_DU    = np.array([1.13304, 1.13351, 1.13777, 1.14464, 1.15486,
+                             1.17016, 1.19128, 1.22017, 1.26102])
+    R_FLAT = 315. / 276.
+    CEN_MIN, CEN_MAX = 30., 80.   # 30-80% centrality window
+
+    # Degree-3 polynomial fit to Glauber (max residual ~9e-4, negligible vs data)
+    glauber_poly = np.poly1d(np.polyfit(CEN_GLAUBER, RATIO_DU, 3))
+
+    _energy_key = lambda f: float(f.split('/')[-2].split('_')[1].replace('p', '.').replace('GeV', ''))
+    files_TPC = sorted([f for f in dict_input['ratio']
+                        if '_TPC' in os.path.basename(f)
+                        and 'isobar' not in f],
+                       key=_energy_key)
+    def fit_alpha(f):
+        """Return alpha fit dict for a single yaml file, or None if too few bins."""
+        with open(f, 'r') as fh:
+            d = yaml.load(fh, Loader=yaml.CLoader)
+        cen       = np.array(d['x'])
+        y         = np.array(d['y'])
+        yerr_stat = np.array(d['yerr_stat'])
+        mask = (cen >= CEN_MIN) & (cen <= CEN_MAX)
+        cen_m, y_m, yerr_m = cen[mask], y[mask], yerr_stat[mask]
+        n = len(cen_m)
+        if n < 2:
+            return None
+        g     = glauber_poly(cen_m) - R_FLAT
+        delta = y_m - R_FLAT
+        w     = 1. / yerr_m**2
+        alpha   = np.sum(delta * g * w) / np.sum(g**2 * w)
+        sigma_a = 1. / np.sqrt(np.sum(g**2 * w))
+        signif  = alpha / sigma_a
+        model_m = R_FLAT + alpha * g
+        return dict(alpha=alpha, sigma=sigma_a, signif=signif, n=n,
+                    chi2_flat=np.sum(delta**2 * w),
+                    chi2_glauber=np.sum((y_m - glauber_poly(cen_m))**2 * w),
+                    chi2_best=np.sum((y_m - model_m)**2 * w))
+
+    # --- Per-energy analytic alpha fit (30-80%, TPC only) ---
+    results_TPC = {}
+    print(f'\n===== Neutron Skin Alpha Test ({CEN_MIN:.0f}-{CEN_MAX:.0f}%, TPC) =====')
+    for f in files_TPC:
+        energy = f.split('/')[-2].split('_')[1].replace('p', '.')
+        res = fit_alpha(f)
+        results_TPC[energy] = res
+        if res is None:
+            print(f'  {energy:8s}: too few bins (n<2), skipping')
+        else:
+            print(f'  {energy:8s}: alpha={res["alpha"]:.3f}+/-{res["sigma"]:.3f} ({res["signif"]:+.2f}sigma)  '
+                  f'chi2/ndf: flat={res["chi2_flat"]/res["n"]:.2f}  Glauber={res["chi2_glauber"]/res["n"]:.2f}  '
+                  f'best={res["chi2_best"]/(res["n"]-1):.2f}  (n={res["n"]})')
+    print('============================================\n')
+
+    # --- Plot (same format as ratio.pdf) ---
+    fig_ns = plt.figure(figsize=(16, 8))
+    gs_ns  = fig_ns.add_gridspec(ncols=4, nrows=2, hspace=0.0, wspace=0.0)
+    ax_ns  = gs_ns.subplots(sharex='col', sharey='row')
+    ax_ns  = ax_ns.flatten()
+
+    cen_smooth = np.linspace(35, 85, 200)
+    lb, rb = 35., 85.
+
+    for i, f in enumerate(files_TPC):
+        energy = f.split('/')[-2].split('_')[1].replace('p', '.')
+        ax = ax_ns[i]
+        with open(f, 'r') as fh:
+            d = yaml.load(fh, Loader=yaml.CLoader)
+        cen       = np.array(d['x'])
+        y         = np.array(d['y'])
+        yerr_stat = np.array(d['yerr_stat'])
+        yerr_sys  = np.array(d['yerr_sys'])
+        mask = (cen >= CEN_MIN) & (cen <= CEN_MAX)
+
+        shift = 1.
+        ax.errorbar(cen[mask]+shift, y[mask], yerr=yerr_stat[mask], **marker_styles['TPC'])
+        for j in np.where(mask)[0]:
+            ax.fill_between(np.array([cen[j]-0.5, cen[j]+0.5])+shift,
+                            y[j]-yerr_sys[j], y[j]+yerr_sys[j],
+                            color=marker_styles['TPC']['color'], alpha=0.3)
+
+        ax.hlines(R_FLAT, lb, rb, color='C3', linestyle='--')
+        ax.hlines(1,      lb, rb, color='black', linestyle='--')
+        ax.fill_between(cen_smooth,
+                        glauber_poly(cen_smooth) - 1e-5,
+                        glauber_poly(cen_smooth) + 1e-5,
+                        color='C2', alpha=0.8)
+
+        res = results_TPC.get(energy)
+        if res is not None:
+            model_s = R_FLAT + res['alpha'] * (glauber_poly(cen_smooth) - R_FLAT)
+            ax.plot(cen_smooth, model_s, color='C1', lw=1.5, ls='-.')
+
+        ax.annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy,
+                    xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction',
+                    horizontalalignment='left')
+        if res is not None:
+            ax.annotate(
+                fr'$\alpha={res["alpha"]:.2f}\pm{res["sigma"]:.2f}$ ({res["signif"]:+.1f}$\sigma$)',
+                xy=(0.97, 0.78), fontsize=12, xycoords='axes fraction', ha='right')
+        ax.set_xlim(lb - 5, rb + 5)
+        ax.set_ylim(0.509, 1.759)
+
+    # Last panel: legend only
+    ax_last = ax_ns[7]
+    ax_last.plot([], [], ' ', label='AuAu')
+    ax_last.errorbar([], [], yerr=[], label='TPC Event plane', **marker_styles['TPC'])
+    ax_last.fill_between([], [], [], color='C2', alpha=0.8, label='Glauber d/u')
+    ax_last.hlines(999, lb, rb, color='C3', linestyle='--', label='315/276')
+    ax_last.hlines(999, lb, rb, color='black', linestyle='--', label='1')
+    ax_last.plot([], [], color='C1', lw=1.5, ls='-.', label=r'Best-fit $\alpha$')
+    ax_last.legend(fontsize=13, frameon=False, loc='center')
+    ax_last.set_xlim(lb - 5, rb + 5)
+    ax_last.set_ylim(0.509, 1.759)
+
+    fig_ns.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.grid(False)
+    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
+    plt.ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=18)
+
+    plt.figure(fig_ns.number)
+    plt.savefig(paper_plot_path + '/neutron_skin_test.pdf')
+    plt.savefig(paper_plot_path + '/neutron_skin_test.eps', format='eps')
+    figs.append(fig_ns)
+    plt.close()
+    return figs
+
+
 def calculate_chi2_per_ndf(data_points, model_points, nparams):
     """
     Calculate chi2 per ndf for the given data points and model points. Use total errors. 
@@ -751,9 +1073,11 @@ def main(dict_input, output_file=None):
     figs = plot_ratio(dict_input, figs, paper_plots_path)
     figs = plot_ratio_one_energy(dict_input, figs, paper_plots_path)
     figs = plot_alternative_ratio(dict_input, figs, paper_plots_path)
+    figs = plot_alternative_ratio_integrated(dict_input, figs, paper_plots_path)
     figs = plot_energy_dep(dict_input, figs, paper_plots_path)
     figs = plot_energy_dep_lambda(dict_input, figs, paper_plots_path)
     figs = plot_isobar_test(dict_input, figs, paper_plots_path)
+    figs = neutron_skin_alpha_test(dict_input, figs, paper_plots_path)
 
     if output_file is not None:
         pdf = matplotlib.backends.backend_pdf.PdfPages(output_file)
