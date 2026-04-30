@@ -13,7 +13,7 @@ correct_eff: 1
 pt_fit_lo: 
   {7p7GeV: 0.15, 9p2GeV: 0.15, 11p5GeV: 0.15, 14p6GeV: 0.15, 17p3GeV: 0.15, 19p6GeV: 0.15, 27GeV: 0.15, isobar_Zr: 0.15, isobar_Ru: 0.15}
 pt_fit_hi: 
-  {7p7GeV: 3,    9p2GeV: 0.3,  11p5GeV: 0.3,  14p6GeV: 3,    17p3GeV: 3,    19p6GeV: 3,    27GeV: 3,    isobar_Zr: 3,    isobar_Ru: 3}
+  {7p7GeV: 3,    9p2GeV: 3,    11p5GeV: 3,    14p6GeV: 3,    17p3GeV: 3,    19p6GeV: 3,    27GeV: 3,    isobar_Zr: 3,    isobar_Ru: 3}
 # pt/nq cut for integrated v2
 ptnq_lo: 
   {7p7GeV: 0.08, 9p2GeV: 0.08, 11p5GeV: 0.08, 14p6GeV: 0.08, 17p3GeV: 0.08, 19p6GeV: 0.08, 27GeV: 0.08, isobar_Zr: 0.08, isobar_Ru: 0.08}

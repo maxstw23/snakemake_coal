@@ -35,9 +35,10 @@
 #include <string>
 #include "./Efficiency.h"
 
-#define num_par 4
+#define num_par 6
 #define num_EP 2
 #define num_cen 9
+#define num_pt_bins 500
 
 R__LOAD_LIBRARY(./ExtendedTProfile_cpp.so)
 R__LOAD_LIBRARY(./Efficiency_cpp.so)
@@ -47,10 +48,11 @@ using namespace std;
 const float PI = TMath::Pi();
 const float pion_mass = 0.13957;
 const float proton_mass = 0.93827;
+const float kion_mass = 0.49367;
 // const int energy = 14;
 
-void v2_eff_correction(const char* rawFileName, const char* outFileName, float y_cut, float pT_lo_nq, float pT_hi_nq, const char* EPD_method, bool use_2D, bool use_mT=false)
-{   
+void v2_eff_correction(const char* rawFileName, const char* outFileName, float y_cut, float pT_lo_nq, float pT_hi_nq, const char* EPD_method, bool use_2D, bool use_mT=false, int sys_tag=0)
+{
     // preprocess the input file in case of 2D analysis
     char *inFileName = Form("%s", rawFileName);
     if (use_2D)
@@ -74,12 +76,12 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
     {
         res[0][i] = sqrt(hTPC_res->GetBinContent(i+1));
         res_err[0][i] = hTPC_res->GetBinError(i+1) / (2*res[0][i]);
-        if (!strcmp(EPD_method, "1st")) 
+        if (!strcmp(EPD_method, "1st"))
         {
             res[1][i] = hEPD_res->GetBinContent(i+1);
             res_err[1][i] = hEPD_res->GetBinError(i+1);
         }
-        else if (!strcmp(EPD_method, "2nd")) 
+        else if (!strcmp(EPD_method, "2nd"))
         {
             res[1][i] = sqrt(hEPD_res->GetBinContent(i+1));
             res_err[1][i] = hEPD_res->GetBinError(i+1) / (2*res[1][i]);
@@ -103,15 +105,22 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
 
     //const char* particle = "piminus"; // "pipluslus", "piminus", "kplus", "kminus", "proton", "antiproton"
     //const char* EP_method = "TPC"; // "TPC", "EPD"
-    const char* particles[num_par] = {"piplus", "piminus", "proton", "antiproton"};
+    const char* particles[num_par] = {"piplus", "piminus", "proton", "antiproton", "kplus", "kminus"};
     const char* EP_methods[num_EP] = {"TPC", "EPD"};
 
     float v2[num_par][num_EP][num_cen] = {0};
     float v2_err[num_par][num_EP][num_cen] = {0};
     float v2_counts[num_par][num_cen] = {0};
 
+    float v2_pt[num_par][num_EP][num_cen][num_pt_bins] = {0};
+    float v2_pt_err[num_par][num_EP][num_cen][num_pt_bins] = {0};
+    float v2_pt_counts[num_par][num_cen][num_pt_bins] = {0};
+
+    // systematic uncertainty
+    if (sys_tag == 5) pT_lo_nq = 0.3;
+
     for (int par=0; par<num_par; par++)
-    {   
+    {
         const char* particle = particles[par];
         for (int ep=0; ep<num_EP; ep++)
         {
@@ -120,19 +129,24 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
             float pT_max = 2.0;
             float pT_TOFth = 0.2;
             if (!strcmp(particle, "piplus") || !strcmp(particle, "piminus")) {pT_TOFth = 0.4; pT_min = pT_lo_nq*2; pT_max = pT_hi_nq*2;} // 0.105 - 1.86 mT range for 0.2 - 2.0 pT
-            if (!strcmp(particle, "kplus") || !strcmp(particle, "kminus")) pT_TOFth = 0.4;
+            if (!strcmp(particle, "kplus") || !strcmp(particle, "kminus")) {pT_TOFth = 0.4; pT_min = pT_lo_nq*2; pT_max = pT_hi_nq*2;} // 0.25 - 2.0 mT range for 0.2 - 2.0 pT
             if (!strcmp(particle, "proton") || !strcmp(particle, "antiproton")) {pT_TOFth = 0.6; pT_min = pT_lo_nq*3; pT_max = pT_hi_nq*3;} // 0.03 - 1.27 mT range for 0.2 - 2.0 pT
             if (use_mT)
             {
-                if (!strcmp(particle, "piplus") || !strcmp(particle, "piminus")) 
+                if (!strcmp(particle, "piplus") || !strcmp(particle, "piminus"))
                 {
                     pT_min = sqrt((pT_min+pion_mass) * (pT_min+pion_mass) - pion_mass * pion_mass);
                     pT_max = sqrt((pT_max+pion_mass) * (pT_max+pion_mass) - pion_mass * pion_mass);
                 }
-                if (!strcmp(particle, "proton") || !strcmp(particle, "antiproton")) 
+                if (!strcmp(particle, "proton") || !strcmp(particle, "antiproton"))
                 {
                     pT_min = sqrt((pT_min+proton_mass) * (pT_min+proton_mass) - proton_mass * proton_mass);
                     pT_max = sqrt((pT_max+proton_mass) * (pT_max+proton_mass) - proton_mass * proton_mass);
+                }
+                if (!strcmp(particle, "kplus") || !strcmp(particle, "kminus"))
+                {
+                    pT_min = sqrt((pT_min+kion_mass) * (pT_min+kion_mass) - kion_mass * kion_mass);
+                    pT_max = sqrt((pT_max+kion_mass) * (pT_max+kion_mass) - kion_mass * kion_mass);
                 }
             }
             // assert(pT_min < pT_TOFth && "Check particle type!");
@@ -153,7 +167,7 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
 
             Efficiency *eff = new Efficiency();
             for (int cen=1; cen<=num_cen; cen++)
-            {   
+            {
                 TProfile *p = nullptr;
                 if (!strcmp(EPD_method, "1st")) p = (TProfile*)f->Get(Form("h%s_%s_v2_pt_%d_1st", particle, EP_method, cen));
                 else if (!strcmp(EPD_method, "2nd")) p = (TProfile*)f->Get(Form("h%s_%s_v2_pt_%d_2nd", particle, EP_method, cen));
@@ -163,7 +177,7 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
                 //TH1D *hpT_TOF = (TH1D*)f->Get(Form("hgpT_TOF_%d", cen));
                 //TEfficiency *hTOF_Eff = new TEfficiency(*hpT_TOF, *hpT);
                 TEfficiency *hTOF_Eff = (TEfficiency*)feff->Get(Form("hTOFEff_%d", cen));
-                ExtendedTProfile *hv2_pt = new ExtendedTProfile(*p); 
+                ExtendedTProfile *hv2_pt = new ExtendedTProfile(*p);
                 hv2_pt->Sumw2();
                 hv2_pt->SetErrorOption("s");
 
@@ -209,18 +223,32 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
                 // v2[par][ep][cen-1] = v2_raw / res_val;
                 // v2_err[par][ep][cen-1] = sqrt(pow(v2_raw_err / v2_raw, 2)+ pow(res_val_err / res_val, 2)) * fabs(v2[par][ep][cen-1]);
                 v2[par][ep][cen-1] = v2_raw;
-                v2_err[par][ep][cen-1] = v2_raw_err;                
+                v2_err[par][ep][cen-1] = v2_raw_err;
                 v2_counts[par][cen-1] = hv2_pt_new->GetBinEffectiveEntries(2);
-            }  
+
+                // v2 vs pT
+                hv2_pt->SetErrorOption("");
+                for (int i = 0; i < hv2_pt->GetNbinsX(); i++)
+                {
+                    float pt = hv2_pt->GetBinCenter(i + 1);
+                    if (pt < 0.0 || pt > 2.0) continue;
+                    if (i >= num_pt_bins) continue;
+                    float v2_raw = hv2_pt->GetBinContent(i + 1);
+                    float v2_raw_err = hv2_pt->GetBinError(i + 1);
+                    v2_pt[par][ep][cen-1][i] = v2_raw;
+                    v2_pt_err[par][ep][cen-1][i] = v2_raw_err;
+                    v2_pt_counts[par][cen-1][i] = hv2_pt->GetBinEntries(i + 1);
+                }
+            }
         }
     }
     // pretty print v2 and v2 err to csv
     ofstream outputFile(outFileName);
-    outputFile << "piplus_counts,piminus_counts,proton_counts,antiproton_counts,";
-    outputFile << "piplus_v2_TPC,piminus_v2_TPC,proton_v2_TPC,antiproton_v2_TPC,";
-    outputFile << "piplus_v2_err_TPC,piminus_v2_err_TPC,proton_v2_err_TPC,antiproton_v2_err_TPC,";
-    outputFile << "piplus_v2_EPD,piminus_v2_EPD,proton_v2_EPD,antiproton_v2_EPD,";
-    outputFile << "piplus_v2_err_EPD,piminus_v2_err_EPD,proton_v2_err_EPD,antiproton_v2_err_EPD" << endl;
+    outputFile << "piplus_counts,piminus_counts,proton_counts,antiproton_counts,kplus_counts,kminus_counts,";
+    outputFile << "piplus_v2_TPC,piminus_v2_TPC,proton_v2_TPC,antiproton_v2_TPC,kplus_v2_TPC,kminus_v2_TPC,";
+    outputFile << "piplus_v2_err_TPC,piminus_v2_err_TPC,proton_v2_err_TPC,antiproton_v2_err_TPC,kplus_v2_err_TPC,kminus_v2_err_TPC,";
+    outputFile << "piplus_v2_EPD,piminus_v2_EPD,proton_v2_EPD,antiproton_v2_EPD,kplus_v2_EPD,kminus_v2_EPD,";
+    outputFile << "piplus_v2_err_EPD,piminus_v2_err_EPD,proton_v2_err_EPD,antiproton_v2_err_EPD,kplus_v2_err_EPD,kminus_v2_err_EPD" << endl;
     for (int i=0; i<num_cen; i++)
     {
         for (int j=0; j<num_par; j++) outputFile << v2_counts[j][i] << ",";
@@ -230,8 +258,30 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
         for (int j=0; j<num_par-1; j++) outputFile << v2_err[j][1][i] << ",";
         outputFile << v2_err[num_par-1][1][i] << endl;
     }
-
     outputFile.close();
+
+    // v2 vs pT
+    for (int cen=0; cen<num_cen; cen++)
+    {
+        std::string outFileNameStr_cen(outFileName);
+        outFileNameStr_cen.replace(outFileNameStr_cen.find(".csv"), 4, Form("_cen%d.csv", cen+1));
+        ofstream outputFile_cen(outFileNameStr_cen);
+        outputFile_cen << "piplus_counts,piminus_counts,proton_counts,antiproton_counts,kplus_counts,kminus_counts,";
+        outputFile_cen << "piplus_v2_TPC,piminus_v2_TPC,proton_v2_TPC,antiproton_v2_TPC,kplus_v2_TPC,kminus_v2_TPC,";
+        outputFile_cen << "piplus_v2_err_TPC,piminus_v2_err_TPC,proton_v2_err_TPC,antiproton_v2_err_TPC,kplus_v2_err_TPC,kminus_v2_err_TPC,";
+        outputFile_cen << "piplus_v2_EPD,piminus_v2_EPD,proton_v2_EPD,antiproton_v2_EPD,kplus_v2_EPD,kminus_v2_EPD,";
+        outputFile_cen << "piplus_v2_err_EPD,piminus_v2_err_EPD,proton_v2_err_EPD,antiproton_v2_err_EPD,kplus_v2_err_EPD,kminus_v2_err_EPD" << endl;
+        for (int ptbin=0; ptbin<num_pt_bins; ptbin++)
+        {
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt_counts[j][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt[j][0][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt_err[j][0][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt[j][1][cen][ptbin] << ",";
+            for (int j=0; j<num_par-1; j++) outputFile_cen << v2_pt_err[j][1][cen][ptbin] << ",";
+            outputFile_cen << v2_pt_err[num_par-1][1][cen][ptbin] << endl;
+        }
+        outputFile_cen.close();
+    }
     f->Close();
     feff->Close();
 }

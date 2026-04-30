@@ -38,6 +38,7 @@
 #define num_par 4
 #define num_EP 2
 #define num_cen 9
+#define num_pt_bins 500
 
 R__LOAD_LIBRARY(./ExtendedTProfile_cpp.so)
 R__LOAD_LIBRARY(./Efficiency_cpp.so)
@@ -110,6 +111,10 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
     float v2_err[num_par][num_EP][num_cen] = {0};
     float v2_counts[num_par][num_cen] = {0};
 
+    float v2_pt[num_par][num_EP][num_cen][num_pt_bins] = {0};
+    float v2_pt_err[num_par][num_EP][num_cen][num_pt_bins] = {0};
+    float v2_pt_counts[num_par][num_cen][num_pt_bins] = {0};
+
     for (int par=0; par<num_par; par++)
     {   
         const char* particle = particles[par];
@@ -171,7 +176,7 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
                 for (int i = 0; i < hv2_pt->GetNbinsX(); i++)
                 {
                     float pt = hv2_pt->GetBinCenter(i + 1);
-                    if (pt < pT_min || pt > pT_max) continue;
+                    if (pt > pT_max) continue;
                     float TOF_eff = 1.0;
                     if (pt > pT_TOFth) TOF_eff = hTOF_Eff->GetEfficiency(hTOF_Eff->FindFixBin(pt));
                     float TPC_eff = eff->GetEfficiency1D(pt, cen, par_str); //P0[cen-1]*exp(-pow(P1[cen-1]/pt,P2[cen-1]));
@@ -193,6 +198,14 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
                     float entries_eff_current = hv2_pt->GetBinEffectiveEntries(i + 1);
                     hv2_pt->SetBinError(i + 1, sqrt(E)); // set sqrt(E(j))
                     hv2_pt->SetSumw2(i + 1, sumw2_new);
+                }
+
+                // store per-pT values after efficiency correction
+                for (int i = 0; i < hv2_pt->GetNbinsX() && i < num_pt_bins; i++)
+                {
+                    v2_pt[par][ep][cen-1][i] = hv2_pt->GetBinContent(i+1);
+                    v2_pt_err[par][ep][cen-1][i] = hv2_pt->GetBinError(i+1);
+                    if (ep == 0) v2_pt_counts[par][cen-1][i] = hv2_pt->GetBinEntries(i+1);
                 }
 
                 float cut1 = hv2_pt->GetXaxis()->GetBinLowEdge(1);
@@ -232,6 +245,30 @@ void v2_eff_correction(const char* rawFileName, const char* outFileName, float y
     }
 
     outputFile.close();
+
+    // v2 vs pT per centrality
+    for (int cen=0; cen<num_cen; cen++)
+    {
+        std::string outFileNameStr_cen(outFileName);
+        outFileNameStr_cen.replace(outFileNameStr_cen.find(".csv"), 4, Form("_cen%d.csv", cen+1));
+        ofstream outputFile_cen(outFileNameStr_cen);
+        outputFile_cen << "piplus_counts,piminus_counts,proton_counts,antiproton_counts,";
+        outputFile_cen << "piplus_v2_TPC,piminus_v2_TPC,proton_v2_TPC,antiproton_v2_TPC,";
+        outputFile_cen << "piplus_v2_err_TPC,piminus_v2_err_TPC,proton_v2_err_TPC,antiproton_v2_err_TPC,";
+        outputFile_cen << "piplus_v2_EPD,piminus_v2_EPD,proton_v2_EPD,antiproton_v2_EPD,";
+        outputFile_cen << "piplus_v2_err_EPD,piminus_v2_err_EPD,proton_v2_err_EPD,antiproton_v2_err_EPD" << endl;
+        for (int ptbin=0; ptbin<num_pt_bins; ptbin++)
+        {
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt_counts[j][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt[j][0][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt_err[j][0][cen][ptbin] << ",";
+            for (int j=0; j<num_par; j++) outputFile_cen << v2_pt[j][1][cen][ptbin] << ",";
+            for (int j=0; j<num_par-1; j++) outputFile_cen << v2_pt_err[j][1][cen][ptbin] << ",";
+            outputFile_cen << v2_pt_err[num_par-1][1][cen][ptbin] << endl;
+        }
+        outputFile_cen.close();
+    }
+
     f->Close();
     feff->Close();
 }

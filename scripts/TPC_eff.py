@@ -93,13 +93,17 @@ def find_eff(particle, eta_cut, energy, paths, pt_lo, pt_hi):
         ax[(cen - 1) // 3, (cen - 1) % 3].set_ylabel('Eff')
         lsq = LeastSquares(pt[cut][~is_nan], eff_pteta[~is_nan], eff_err_pteta[~is_nan], fcn)
         m = Minuit(lsq, p0=1.1, p1=0.2, p2=3.4, p3=-0.2, p4=0.04)
-        if energy == '27GeV' or energy == '7p7GeV':
+        if energy in ('27GeV', '7p7GeV', '9p2GeV', '11p5GeV'):
             m = Minuit(lsq, p0=0.8, p1=0.2, p2=5., p3=-0.2, p4=0.04)
-        if energy == '14p6GeV':
+        if energy in ('14p6GeV', '17p3GeV'):
             m = Minuit(lsq, p0=0.9, p1=0.2, p2=3.4, p3=-0.2, p4=0.04)
         print(m.migrad())
+        if not m.valid:
+            m.simplex()
+            m.migrad()
+        migrad_valid = m.valid
         m.hesse()
-        if m.valid:
+        if migrad_valid:
             status[cen - 1] = 1
 
         p[0][cen - 1] = m.values['p0']

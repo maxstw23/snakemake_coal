@@ -75,10 +75,10 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         no_lambda = True
     merged_bins = {
         '7.7GeV': {'EPD': [[7,8,9],[3,4]]},
-         '9.2GeV': {'EPD': [[1,2,3]]},
+         '9.2GeV': {'TPC': [[1,2]], 'EPD': [[1,2,3]]},
         '11.5GeV': {'TPC': [[1,2]], 'EPD': [[1,2]]},
         '14.6GeV': {'TPC': [[1,2]], 'EPD': [[1,2]]},
-        '17.3GeV': {'TPC': [[1,2]], 'EPD': [[1,2,3]]},
+        '17.3GeV': {'TPC': [[1,2]], 'EPD': [[1,2,3],[8,9]]},
         '19.6GeV': {'TPC': [[1,2]], 'EPD': [[1,2]]},
         '27GeV': {'TPC': [[1,2,3]], 'EPD': [[1,2,3]]},
     }
@@ -604,7 +604,10 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         ax_blank.text(0.5, 0.5, 'No lambda data found', ha='center', va='center', fontsize=20)
         fig_blank.savefig(f'{outputDir}/coal_lambda_TPC.pdf')
         fig_blank.savefig(f'{outputDir}/coal_lambda_EPD.pdf')
-    
+
+    # pT lower-bound scan for R ratio
+    plot_ratio_pt_scan(df_cen, df_res, outputDir, energy)
+
 
 def none_or_float(arg):
     if arg.lower() == 'none':
@@ -642,7 +645,7 @@ def merge_helper(dict_arr, bin_groups):
             for b in range(len(bins)):
                 temp_2D[b,:] = temp
                 if b > 0:
-                    temp_2D[b, bins[0]-1] = arr[bins[b]-1]
+                    temp_2D[b, bins[0]-1-last] = arr[bins[b]-1]
         
             # now average along the first axis (noting that these are measurements with uncertainties)
             # (so their weights are taken into account)
@@ -655,6 +658,109 @@ def merge_helper(dict_arr, bin_groups):
         # actually, we don't need to since uncertainties package takes care of correlation
         dict_v2[key] = temp    
     return dict_v2
+
+def plot_ratio_pt_scan(df_cen, df_res, outputDir, energy):
+    """Scan coalescence R ratio vs lower pT/nq integration bound.
+
+    x-axis: pT/nq lower bound (0.08 to 0.40 in steps of 0.04).
+    Each species uses its own pT window: pT_lo = ptnq_lo * nq, pT_hi = ptnq_hi * nq.
+    """
+    PTNQ_HI = 0.60
+    PTNQ_LO_VALUES = np.arange(0.08, 0.41, 0.04)  # 0.08, 0.12, ..., 0.40
+    NQ_PION = 2
+    NQ_PBAR = 3
+    N_PT = 500
+    PT_BIN_WIDTH = 0.01
+    pt_centers = np.linspace(PT_BIN_WIDTH / 2, N_PT * PT_BIN_WIDTH - PT_BIN_WIDTH / 2, N_PT)
+    cen_x = np.array([75., 65., 55., 45., 35., 25., 15., 7.5, 2.5])
+    CEN_LABELS = ["70-80%", "60-70%", "50-60%", "40-50%", "30-40%",
+                  "20-30%", "10-20%", "5-10%", "0-5%"]
+
+    def weighted_avg(v2, err, counts, mask):
+        w = counts[mask]
+        if w.sum() == 0:
+            return np.nan, np.nan
+        val = np.average(v2[mask], weights=w)
+        e = np.sqrt(np.sum((w * err[mask]) ** 2)) / w.sum()
+        return val, e
+
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+    colors = plt.cm.tab10(np.linspace(0, 1, 9))
+
+    for ep_idx, EP in enumerate(['TPC', 'EPD']):
+        ax = axes[ep_idx]
+        resolution = df_res[f'{EP}_res'].values
+
+        for cen in range(9):
+            res_val = resolution[cen]
+            if res_val <= 0 or np.isnan(res_val):
+                continue
+
+            df_c = df_cen[cen]
+            pip_v2 = df_c[f'piplus_v2_{EP}'].values[:N_PT] / res_val
+            pip_err = df_c[f'piplus_v2_err_{EP}'].values[:N_PT] / res_val
+            pip_counts = df_c['piplus_counts'].values[:N_PT]
+            pim_v2 = df_c[f'piminus_v2_{EP}'].values[:N_PT] / res_val
+            pim_err = df_c[f'piminus_v2_err_{EP}'].values[:N_PT] / res_val
+            pim_counts = df_c['piminus_counts'].values[:N_PT]
+            ap_v2 = df_c[f'antiproton_v2_{EP}'].values[:N_PT] / res_val
+            ap_err = df_c[f'antiproton_v2_err_{EP}'].values[:N_PT] / res_val
+            ap_counts = df_c['antiproton_counts'].values[:N_PT]
+
+            R_vals = np.full(len(PTNQ_LO_VALUES), np.nan)
+            R_errs = np.full(len(PTNQ_LO_VALUES), np.nan)
+
+            for i, ptnq_lo in enumerate(PTNQ_LO_VALUES):
+                pt_lo_pion = ptnq_lo * NQ_PION
+                pt_hi_pion = PTNQ_HI * NQ_PION
+                pt_lo_pbar = ptnq_lo * NQ_PBAR
+                pt_hi_pbar = PTNQ_HI * NQ_PBAR
+
+                mask_pi = (pt_centers >= pt_lo_pion) & (pt_centers <= pt_hi_pion)
+                mask_ap = (pt_centers >= pt_lo_pbar) & (pt_centers <= pt_hi_pbar)
+
+                pip_int, pip_int_err = weighted_avg(pip_v2, pip_err, pip_counts, mask_pi)
+                pim_int, pim_int_err = weighted_avg(pim_v2, pim_err, pim_counts, mask_pi)
+                ap_int, ap_int_err = weighted_avg(ap_v2, ap_err, ap_counts, mask_ap)
+
+                if np.isnan(pip_int) or np.isnan(pim_int) or np.isnan(ap_int):
+                    continue
+
+                pip_u = ufloat(pip_int, pip_int_err)
+                pim_u = ufloat(pim_int, pim_int_err)
+                ap_u = ufloat(ap_int, ap_int_err)
+
+                denom = pip_u - 2.0 / 3.0 * ap_u
+                if denom.nominal_value != 0:
+                    R = (pim_u - 2.0 / 3.0 * ap_u) / denom
+                    R_vals[i] = R.nominal_value
+                    R_errs[i] = R.std_dev
+
+            valid = ~np.isnan(R_vals)
+            if valid.any():
+                ax.errorbar(PTNQ_LO_VALUES[valid], R_vals[valid], R_errs[valid],
+                            fmt='o-', ms=4, capsize=2, color=colors[cen],
+                            label=CEN_LABELS[cen])
+
+        ax.axhline(1, color='black', ls='--', lw=0.8)
+        ax.axhline(315 / 276, color='C3', ls=':', lw=0.8, label='315/276')
+        ax.set_xlabel(r'$(p_T/n_q)_{min}$ (GeV)', fontsize=14)
+        ax.set_title(f'{EP} Event Plane', fontsize=14)
+        ax.set_ylim(0.6, 1.5)
+        ax.tick_params(labelsize=12)
+
+    axes[0].set_ylabel(
+        r'$R = \frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}'
+        r'{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$',
+        fontsize=16)
+    axes[1].legend(fontsize=9, loc='best')
+    fig.suptitle(f'R ratio vs lower $p_T/n_q$ bound — {energy}', fontsize=15)
+    fig.tight_layout()
+    fig.savefig(f'{outputDir}/ratio_pt_scan.pdf')
+    fig.savefig(f'{outputDir}/ratio_pt_scan.png', dpi=150)
+    print(f'Saved: {outputDir}/ratio_pt_scan.pdf')
+    plt.close()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

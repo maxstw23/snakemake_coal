@@ -5,6 +5,9 @@ import glob
 import re
 import uproot
 
+# CERN ROOT via Docker (not installed locally)
+DOCKER_ROOT = 'docker run --rm -v "$(pwd)":/work -w /work rootproject/root:latest root'
+
 # to be changed
 energies = config['energies']
 # grab files of the form result*_{energy}.root
@@ -14,12 +17,18 @@ data_files.update({str(sys_tag): {energy: sorted(glob.glob(f'data/sys_tag_{sys_t
 # check whether the data files contain 2D histograms
 use_2D = {energy: 1 if 'hpiplus_EPD_v2_y_pt_1;1' in uproot.open(data_files['0'][energy]).keys() else 0 for energy in energies}
 
+# Pick eff- or noeff-corrected v2 CSV based on config['correct_eff'].
+# suffix = '' / '_res' / '_cen{N}' to address the integrated, resolution, or per-pT files.
+def v2_csv(sys_tag, energy, suffix=''):
+    tag = 'eff' if config.get('correct_eff', 0) else 'noeff'
+    return f'result/sys_tag_{sys_tag}/energy_{energy}/v2_{tag}_corrected{suffix}.csv'
+
 rule all:
     input: #'plots/coal_report.pdf',
            'plots/final/report.pdf',
            expand('plots/sys_tag_0/energy_{energy}/delta_pion.pdf', energy=energies),
            expand('plots/sys_tag_0/energy_{energy}/coal_combined.pdf', energy=energies),
-           expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies)
+           [v2_csv('0', e) for e in energies]
 
 rule generate_report:
     input: expand('plots/sys_tag_0/energy_{energy}/coal_combined.pdf', energy=energies),
@@ -83,8 +92,8 @@ rule compile_user_class:
 rule v2_eff_correction:
         input: user_class_lib='scripts/ExtendedTProfile_cpp.so',
                 user_class_header='scripts/ExtendedTProfile.h',
-                eff_lib='scripts/{energy}/Efficiency_cpp.so',
                 eff_header='scripts/{energy}/Efficiency.h',
+                eff_cpp='scripts/{energy}/Efficiency.cpp',
                 tof_script = 'scripts/draw_TOF_eff_2.cpp',
                 preprocess_script = 'scripts/coal_preprocess.cpp',
                 script = 'scripts/v2_eff_correction.cpp',
@@ -102,19 +111,20 @@ rule v2_eff_correction:
         shell:
                 """
                 cwd=$(pwd)
-                target_dir=`dirname {input.eff_header}`
-                # target_dir=temp/sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}_eff
-                # rm -rf $target_dir
-                # mkdir -p $target_dir
+                target_dir=temp/sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}
+                rm -rf $target_dir
+                mkdir -p $target_dir
                 cp {input.script} $target_dir
                 cp {input.tof_script} $target_dir
                 cp {input.preprocess_script} $target_dir
-                cp scripts/ExtendedTProfile* $target_dir
-                cd $target_dir
-                root -b -q -l {params.script_name}\(\\"$cwd/{input.data_file}\\"\,\\"$cwd/{output.v2}\\"\,{params.eta_cut}\,{params.pt_lo}\,{params.pt_hi}\,\\"{params.EPD_method}\\"\,{params.use_2D}\,{params.use_mT}\) > $cwd/{log.stdout} 2> $cwd/{log.stderr}
-                rm -f TOFEfficiency.root
-                rm -f preprocessed*
-                cd ..
+                cp scripts/ExtendedTProfile.h $target_dir
+                cp scripts/ExtendedTProfile.cpp $target_dir
+                cp {input.eff_header} $target_dir
+                cp {input.eff_cpp} $target_dir
+                docker run --rm -v "$(pwd)":/work -w /work/$target_dir rootproject/root:latest \
+                    bash -c 'root -b -q -l -e ".L ExtendedTProfile.cpp+" -e ".L Efficiency.cpp+" && root -b -q -l '"'"'{params.script_name}("/work/{input.data_file}","/work/{output.v2}",{params.eta_cut},{params.pt_lo},{params.pt_hi},"{params.EPD_method}",{params.use_2D},{params.use_mT},{wildcards.sys_tag})'"'"'' > {log.stdout} 2> {log.stderr}
+                rm -f $target_dir/TOFEfficiency.root
+                rm -f $target_dir/preprocessed*
                 """
 
 rule v2_no_eff_correction:
@@ -139,19 +149,18 @@ rule v2_no_eff_correction:
         log: stdout='logs/sys_tag_{sys_tag}/energy_{energy}/v2_no_eff_correction.log', stderr='logs/sys_tag_{sys_tag}/energy_{energy}/v2_no_eff_correction.err'
         shell:
                 """
-                cwd=$(pwd)
                 target_dir=temp/sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}
                 rm -rf $target_dir
                 mkdir -p $target_dir
                 cp {input.script} $target_dir
                 cp {input.tof_script} $target_dir
                 cp {input.preprocess_script} $target_dir
-                cp scripts/ExtendedTProfile* $target_dir
-                cd $target_dir
-                root -b -q -l {params.script_name}\(\\"$cwd/{input.data_file}\\"\,\\"$cwd/{output.v2}\\"\,{params.eta_cut}\,{params.pt_lo}\,{params.pt_hi}\,\\"{params.EPD_method}\\"\,{params.use_2D}\,{params.use_mT}\) > $cwd/{log.stdout} 2> $cwd/{log.stderr}
-                rm -f TOFEfficiency.root
-                rm -f preprocessed*
-                cd $cwd
+                cp scripts/ExtendedTProfile.h $target_dir
+                cp scripts/ExtendedTProfile.cpp $target_dir
+                docker run --rm -v "$(pwd)":/work -w /work/$target_dir rootproject/root:latest \
+                    bash -c 'root -b -q -l -e ".L ExtendedTProfile.cpp+" && root -b -q -l '"'"'{params.script_name}("/work/{input.data_file}","/work/{output.v2}",{params.eta_cut},{params.pt_lo},{params.pt_hi},"{params.EPD_method}",{params.use_2D},{params.use_mT})'"'"'' > {log.stdout} 2> {log.stderr}
+                rm -f $target_dir/TOFEfficiency.root
+                rm -f $target_dir/preprocessed*
                 """
 
 rule v2_no_eff_correction_special_sys:
@@ -191,14 +200,51 @@ rule v2_no_eff_correction_special_sys:
                 cd $cwd
                 """
 
+rule v2_eff_correction_special_sys:
+        input: user_class_lib='scripts/ExtendedTProfile_cpp.so',
+                user_class_header='scripts/ExtendedTProfile.h',
+                eff_lib='scripts/{energy}/Efficiency_cpp.so',
+                eff_header='scripts/{energy}/Efficiency.h',
+                tof_script = 'scripts/draw_TOF_eff_2.cpp',
+                preprocess_script = 'scripts/coal_preprocess.cpp',
+                script = 'scripts/v2_eff_correction.cpp',
+                data_file = lambda wildcards: data_files['0'][wildcards.energy]
+        output: v2='result/special_sys_tag_{sys_tag}/energy_{energy}/v2_eff_corrected.csv',
+                res='result/special_sys_tag_{sys_tag}/energy_{energy}/v2_eff_corrected_res.csv'
+        params: pt_lo=lambda wildcards: config['ptnq_lo'][wildcards.energy],
+                pt_hi=lambda wildcards: config['ptnq_hi'][wildcards.energy],
+                eta_cut=config['eta_cut'],
+                script_name = 'v2_eff_correction.cpp',
+                use_2D=lambda wildcards: use_2D[wildcards.energy],
+                use_mT=config['use_mT'],
+                EPD_method=lambda wildcards: config['EPD_method'][wildcards.energy]
+        log: stdout='logs/special_sys_tag_{sys_tag}/energy_{energy}/v2_eff_correction.log', stderr='logs/special_sys_tag_{sys_tag}/energy_{energy}/v2_eff_correction.err'
+        shell:
+                """
+                cwd=$(pwd)
+                target_dir=temp/special_sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}
+                rm -rf $target_dir
+                mkdir -p $target_dir
+                cp {input.script} $target_dir
+                cp {input.tof_script} $target_dir
+                cp {input.preprocess_script} $target_dir
+                cp scripts/ExtendedTProfile* $target_dir
+                cp scripts/{wildcards.energy}/Efficiency* $target_dir
+                cd $target_dir
+                root -b -q -l {params.script_name}\(\\"$cwd/{input.data_file}\\"\,\\"$cwd/{output.v2}\\"\,{params.eta_cut}\,{params.pt_lo}\,{params.pt_hi}\,\\"{params.EPD_method}\\"\,{params.use_2D}\,{params.use_mT}\,{wildcards.sys_tag}\) > $cwd/{log.stdout} 2> $cwd/{log.stderr}
+                rm -f TOFEfficiency.root
+                rm -f preprocessed*
+                cd $cwd
+                """
+
 rule plot_v2:
-    input: data_points='result/sys_tag_{sys_tag}/energy_{energy}/v2_noeff_corrected.csv',
+    input: data_points=lambda wildcards: v2_csv(wildcards.sys_tag, wildcards.energy),
            data_points_lambda='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_EPD.csv',
            data_points_lambdabar='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_EPD.csv',
            data_points_lambda_TPC='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_TPC.csv',
            data_points_lambdabar_TPC='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_TPC.csv',
            script='scripts/plot_v2_new.py',
-           resolution='result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv'
+           resolution=lambda wildcards: v2_csv('0', wildcards.energy, '_res')
     output: 'plots/sys_tag_{sys_tag}/energy_{energy}/coal_TPC.pdf',
             'plots/sys_tag_{sys_tag}/energy_{energy}/coal_EPD.pdf',
             'plots/sys_tag_{sys_tag}/energy_{energy}/coal_combined.pdf',
@@ -209,23 +255,24 @@ rule plot_v2:
             'plots/sys_tag_{sys_tag}/energy_{energy}/coal_lambda_TPC.pdf',
             'plots/sys_tag_{sys_tag}/energy_{energy}/coal_lambda_EPD.pdf',
             'plots/sys_tag_{sys_tag}/energy_{energy}/lambda_delta_v2_TPC.yaml',
-            'plots/sys_tag_{sys_tag}/energy_{energy}/lambda_delta_v2_EPD.yaml'
+            'plots/sys_tag_{sys_tag}/energy_{energy}/lambda_delta_v2_EPD.yaml',
+            'plots/sys_tag_{sys_tag}/energy_{energy}/ratio_pt_scan.pdf'
     params: yrange_lo=lambda wildcards: config['plotting']['yrange_lo'][wildcards.energy] if config['plotting']['yrange_strategy'] == 'manual' else None,
             yrange_hi=lambda wildcards: config['plotting']['yrange_hi'][wildcards.energy] if config['plotting']['yrange_strategy'] == 'manual' else None
     log: stdout='logs/sys_tag_{sys_tag}/energy_{energy}/plot_v2_eff_correction.log', stderr='logs/sys_tag_{sys_tag}/energy_{energy}/plot_v2_eff_correction.err'
     shell:
         """
-        python {input.script} '{input.data_points}' '{input.data_points_lambda}' '{input.data_points_lambdabar}' '{input.resolution}' 'plots/sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}/' '{wildcards.energy}' {params.yrange_lo} {params.yrange_hi} > {log.stdout} 2> {log.stderr}       
+        python {input.script} '{input.data_points}' '{input.data_points_lambda}' '{input.data_points_lambdabar}' '{input.resolution}' 'plots/sys_tag_{wildcards.sys_tag}/energy_{wildcards.energy}/' '{wildcards.energy}' {params.yrange_lo} {params.yrange_hi} > {log.stdout} 2> {log.stderr}
         """
 
 rule plot_v2_special_sys:
-    input: data_points='result/special_sys_tag_{sys_tag}/energy_{energy}/v2_noeff_corrected.csv',
+    input: data_points=lambda wildcards: 'result/special_sys_tag_{sys_tag}/energy_{energy}/v2_'.format(**wildcards) + ('eff' if config.get('correct_eff', 0) else 'noeff') + '_corrected.csv',
            data_points_lambda='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_EPD.csv',
            data_points_lambdabar='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_EPD.csv',
            data_points_lambda_TPC='result/sys_tag_0/energy_{energy}/fit_Lambda_v2_TPC.csv',
            data_points_lambdabar_TPC='result/sys_tag_0/energy_{energy}/fit_Lambdabar_v2_TPC.csv',
            script='scripts/plot_v2_new.py',
-           resolution='result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv'
+           resolution=lambda wildcards: v2_csv('0', wildcards.energy, '_res')
     output: 'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_TPC.pdf',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_EPD.pdf',
             'plots/special_sys_tag_{sys_tag}/energy_{energy}/coal_combined.pdf',
@@ -260,7 +307,7 @@ rule plot_isobar:
         """
 
 rule plot_all:
-    input: data_points=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
+    input: data_points=[v2_csv('0', e) for e in energies],
            script='scripts/plot_all.py'
     output: plot_all='plots/coal_all.pdf',
             plot_peri='plots/coal_peri.pdf'
@@ -320,16 +367,77 @@ rule fit_lambda:
         python {input.script} {input.data_file} {output.data_points} --particle {wildcards.particle} --EP {wildcards.EP} --yrebin {params.yrebin} --max_refit 500 --paper_plot_path {params.invmass_plot} > {log.stdout} 2> {log.stderr}
         """
 
+rule rho_coal_ratio:
+    input: script='scripts/rho_coal_ratio.py',
+           v2=[v2_csv('0', '19p6GeV', f'_cen{cen}') for cen in range(1, 10)],
+           res=v2_csv('0', '19p6GeV', '_res'),
+           v2_int=v2_csv('0', '19p6GeV')
+    output: 'plots/sys_tag_0/energy_19p6GeV/rho_ratio.pdf',
+            'plots/sys_tag_0/energy_19p6GeV/bw_fits.pdf',
+            expand('plots/sys_tag_0/energy_19p6GeV/rho_v2_diagnostic_{EP}_{ch}.pdf',
+                   EP=['TPC','EPD'], ch=['pip','pim']),
+    params: n_bootstrap=100, n_steps=5000
+    log: stdout='logs/rho_coal_ratio.log', stderr='logs/rho_coal_ratio.err'
+    shell:
+        """
+        python {input.script} --n_bootstrap {params.n_bootstrap} --n_steps {params.n_steps} > {log.stdout} 2> {log.stderr}
+        """
+
+BAYES_ENERGIES = ['7p7GeV', '9p2GeV', '11p5GeV', '14p6GeV', '17p3GeV', '19p6GeV', '27GeV']
+
+rule quark_v2_all:
+    input: expand('plots/{energy}/trace.nc', energy=BAYES_ENERGIES)
+
+rule quark_v2_bayes:
+    input:
+        script = 'scripts/quark_v2_bayes.py',
+        v2     = lambda wildcards: [v2_csv('0', wildcards.energy, f'_cen{cen}') for cen in [5, 6, 7]],
+        res    = lambda wildcards: v2_csv('0', wildcards.energy, '_res')
+    output:
+        'plots/{energy}/quark_v2_functions.pdf',
+        'plots/{energy}/quark_v2_comparison.pdf',
+        'plots/{energy}/transported_signal.pdf',
+        'plots/{energy}/posterior_predictive.pdf',
+        'plots/{energy}/trace.nc'
+    params:
+        ep           = 'EPD',
+        out_dir      = 'plots/{energy}',
+        data_dir     = 'result/sys_tag_0/energy_{energy}',
+        csv_prefix   = lambda wildcards: 'v2_eff_corrected' if config.get('correct_eff', 0) else 'v2_noeff_corrected',
+        cen_bins     = '5 6 7',
+        meson_pt_lo  = 0.16,
+        meson_pt_hi  = 2.00,
+        baryon_pt_lo = 0.24,
+        baryon_pt_hi = 3.00,
+    log:
+        stdout = 'logs/quark_v2/{energy}/quark_v2_bayes.log',
+        stderr = 'logs/quark_v2/{energy}/quark_v2_bayes.err'
+    shell:
+        """
+        mkdir -p logs/quark_v2/{wildcards.energy}
+        python {input.script} \
+            --energy       {wildcards.energy} \
+            --ep           {params.ep} \
+            --data_dir     {params.data_dir} \
+            --csv_prefix   {params.csv_prefix} \
+            --out_dir      {params.out_dir} \
+            --cen_bins     {params.cen_bins} \
+            --meson_pt_lo  {params.meson_pt_lo} \
+            --meson_pt_hi  {params.meson_pt_hi} \
+            --baryon_pt_lo {params.baryon_pt_lo} \
+            --baryon_pt_hi {params.baryon_pt_hi} \
+            > {log.stdout} 2> {log.stderr}
+        """
+
 rule generate_paper_plots:
     input: script='scripts/generate_paper_plots.py',
-           res=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected_res.csv', energy=energies), # ['7p7GeV', '14p6GeV', '19p6GeV', '27GeV']),
+           res=[v2_csv('0', e, '_res') for e in energies],
            ratio=expand('plots/final/energy_{energy}/coal_{EP_method}.yaml', energy=energies, EP_method=['TPC', 'EPD']),
            delta_v2=expand('plots/sys_tag_0/energy_{energy}/lambda_delta_v2_{EP_method}.yaml', energy=energies, EP_method=['TPC', 'EPD']),
            delta_v2_isobar=expand('plots/sys_tag_0/energy_{energy}/pi_delta_v2_{EP_method}.yaml', energy=['isobar_Ru', 'isobar_Zr'], EP_method=['TPC', 'EPD']),
-           # v2=expand('result/final/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
-           # v2=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
-           v2=expand('result/sys_tag_0/energy_{energy}/v2_noeff_corrected.csv', energy=energies),
-           v2_eff=expand('result/sys_tag_0/energy_{energy}/v2_eff_corrected.csv', energy=['7p7GeV', '14p6GeV', '19p6GeV', '27GeV'])
+           v2=[v2_csv('0', e) for e in energies],
+           # v2_eff always points at the eff-corrected CSVs so the side-by-side comparison plot keeps working
+           v2_eff=expand('result/sys_tag_0/energy_{energy}/v2_eff_corrected.csv', energy=energies)
     output: 'plots/final/report.pdf'
     log: stdout='logs/generate_paper_plots.log', stderr='logs/generate_paper_plots.err'
     shell:

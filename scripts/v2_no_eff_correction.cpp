@@ -235,7 +235,7 @@ void v2_no_eff_correction(const char* rawFileName, const char* outFileName, floa
                     float v2_raw_err = hv2_pt->GetBinError(i + 1);
                     v2_pt[par][ep][cen-1][i] = v2_raw;
                     v2_pt_err[par][ep][cen-1][i] = v2_raw_err;
-                    v2_pt_counts[par][cen-1][i] = hv2_pt->GetBinEffectiveEntries(i + 1);
+                    v2_pt_counts[par][cen-1][i] = hv2_pt->GetBinEntries(i + 1);
                 }
             }  
         }

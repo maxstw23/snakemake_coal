@@ -289,6 +289,7 @@ def plot_ratio(dict_input, figs, paper_plot_path):
             lb, rb = ax_coal[i].get_xlim()
             ax_coal[i].set_ylim(0.55, 1.649)
             ax_coal[i].hlines(315 / 276, lb, rb, color='C3', label='315/276', linestyle='--')
+            ax_coal[i].hlines(1, lb, rb, color='black', linestyle='--')
             # ax_coal[i].set_xlim(lb, rb)
         # no Glauber for now
         cen_glauber = np.array([2.5,7.5,15,25,35,45,55,65,75])
