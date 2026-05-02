@@ -319,3 +319,131 @@ def ncq_pred_pion(sp, p_arr):
 The Taylor expansion is accurate when $v_2^{\rm NCQ}$ varies slowly over the spread of the mother $p_T$ distribution (i.e., over the width of $T_{v_2}[d,:]$ as a function of $m$). This spread is roughly $\sigma \sim 0.3$–$0.5$ GeV. Since the Richards sigmoid has a characteristic scale $b \sim 0.5$–$1.0$ GeV, the approximation is expected to be good to $\mathcal{O}(\sigma^2/b^2) \sim 10$–$25\%$ of the correction. The first-order term captures the dominant part of this systematic.
 
 A numerical check (comparing the Taylor-expanded prediction against the full matrix result for a typical NCQ curve) can be done by evaluating both on a dense $p_T$ grid before committing to the approximation.
+
+---
+
+## 7. Transfer Matrix — Explicit Definition
+
+### 7.1 Binning
+
+Discretize $p_T$ into $N$ bins with edges:
+
+$$\{p_0, p_1, p_2, \ldots, p_N\}$$
+
+and bin centres:
+
+$$p_{T,i} = \frac{p_i + p_{i+1}}{2}, \quad i = 0, 1, \ldots, N-1$$
+
+Current implementation: $N = 50$, range $[0, 2.5]$ GeV, bin width $0.05$ GeV.
+
+### 7.2 Monte Carlo Simulation
+
+Simulate $N_{\rm MC} = 5\times 10^6$ independent $\rho \to \pi^+\pi^-$ decays. For each event $k$:
+
+1. Sample mother $\rho$ momentum $p_{T}^{(m,k)}$ from blast-wave spectrum.
+2. Decay in $\rho$ rest frame: daughters have momentum
+   $$p^* = \frac{\sqrt{M_\rho^2 - 4m_\pi^2}}{2} \approx 0.358\ \text{GeV}$$
+   in opposite directions with decay angle $\alpha$ drawn uniformly.
+3. Boost to lab frame:
+   $$\beta_T = \frac{p_T^{(m)}}{\sqrt{(p_T^{(m)})^2 + M_\rho^2}}, \qquad \gamma_T = \frac{1}{\sqrt{1 - \beta_T^2}}$$
+   Each daughter acquires lab momentum $p_T^{(d,k)}$ and azimuth $\phi^{(d,k)}$.
+4. Record per daughter: mother bin $m$, daughter bin $d$, and $\cos(2\Delta\phi^{(k)})$ where $\Delta\phi^{(k)} = \phi^{(d,k)} - \phi^{(m,k)}$.
+
+Only $\Delta\phi$ matters — the mother's absolute $\phi$ is irrelevant because $v_2$ is measured relative to the event plane. The uniform draw of $\alpha$ fully determines $\Delta\phi$ after boosting.
+
+### 7.3 Matrix Element $T_{\rm yield}[d, m]$
+
+**Definition:**
+
+$$T_{\rm yield}[d, m] = \Pr\bigl(\text{daughter in bin } d \;\big|\; \text{mother in bin } m\bigr)$$
+
+**Construction from Monte Carlo:**
+
+Let $C[m \to d]$ be the count of daughters landing in bin $d$ whose mother was in bin $m$. Then:
+
+$$T_{\rm yield}[d, m] = \frac{C[m \to d]}{\sum_{d'} C[m \to d']}$$
+
+**Properties:**
+- $T_{\rm yield}[d, m] \geq 0$ for all $d, m$
+- $\sum_d T_{\rm yield}[d, m] = 1$ (normalized per-daughter; each mother produces 2 daughters, so raw counts sum to $2 \cdot C[m]$, but we divide by $2 \cdot C[m]$)
+
+**Physical interpretation by column $m$ (i.e. $T_{\rm yield}[\,:\,, m]$ for fixed mother $p_T$):**
+- Mother at rest ($p_T^{(m)} = 0$): isotropic decay, daughters uniformly distributed up to $p^* \approx 0.358$ GeV. The column is broad, peaking near $p^*$.
+- Boosted mother (large $p_T^{(m)}$): one daughter is collimated forward (inherits $p_T \approx p_T^{(m)}$), the other backward (gets low $p_T$). The column has two peaks: near $0$ and near $p_T^{(m)}$.
+
+### 7.4 Matrix Element $T_{v_2}[d, m]$
+
+**Definition:**
+
+$$T_{v_2}[d, m] = \bigl\langle \cos(2\Delta\phi) \bigr\rangle_{\substack{\text{daughter in } d \\ \text{mother in } m}}$$
+
+The average is over all MC events where the mother is in bin $m$ and the daughter lands in bin $d$.
+
+**Construction from Monte Carlo:**
+
+Let $S_{c2}[m \to d] = \sum_{k \in (m \to d)} \cos(2\Delta\phi^{(k)})$ be the accumulated $\cos 2\Delta\phi$. Then:
+
+$$T_{v_2}[d, m] = \frac{S_{c2}[m \to d]}{C[m \to d]}$$
+
+**Properties:**
+- $-1 \leq T_{v_2}[d, m] \leq 1$
+- $T_{v_2}[d, m] = 0$: decay fully randomizes azimuth (daughter $v_2$ gets zero contribution from mother $v_2$)
+- $T_{v_2}[d, m] = 1$: daughter perfectly inherits mother's azimuth ($v_2^{\rm daughter} = v_2^{\rm mother}$)
+- In practice $T_{v_2}[d, m] \geq 0$ always, because two-body decay preferentially emits daughters near the mother's direction
+
+**Physical interpretation by regime:**
+- **Low $p_T$ daughter from low $p_T$ mother**: decay kick ($p^* = 0.358$ GeV) dominates over boost. Daughters spray isotropically. $\langle\cos 2\Delta\phi\rangle \to 0$. Thus $T_{v_2} \to 0$.
+- **High $p_T$ daughter from high $p_T$ mother**: boost collimates daughters. $\Delta\phi$ is small. $\cos 2\Delta\phi \to 1$. Thus $T_{v_2} \to 1$.
+- **Intermediate**: $T_{v_2}$ rises smoothly from $0$ to $1$ over $p_T \sim 0\text{--}1.5$ GeV.
+
+### 7.5 From Matrices to $v_2^{\rm decay}$
+
+The observed $v_2$ of decay pions in daughter bin $d$ is a weighted average over all mother bins $m$:
+
+$$v_2^{\rm decay}[d] = \frac{\displaystyle\sum_m T_{v_2}[d,m] \cdot s[m] \cdot v_2^\rho[m]}{\displaystyle\sum_m T_{\rm yield}[d,m] \cdot s[m]}$$
+
+where:
+- $s[m] = \frac{dN}{dp_T}\bigr|_{p_T = p_{T,m}}$ is the blast-wave $\rho$ spectrum weight in mother bin $m$
+- $T_{\rm yield}[d,m] \cdot s[m]$ is the number of daughters from bin $m$ that land in bin $d$, weighted by how many mothers exist at bin $m$
+- $T_{v_2}[d,m] \cdot s[m]$ is the same, further weighted by the $v_2$ transfer efficiency
+
+**Full matrix form** (as stored by `build_rho_precomputed()`):
+
+$$\boxed{A[d, m] = T_{v_2}[d, m] \cdot s[m]} \qquad \text{shape } (N, N)$$
+
+$$\boxed{{\rm norm}[d] = \sum_{m=0}^{N-1} T_{\rm yield}[d, m] \cdot s[m]} \qquad \text{shape } (N,)$$
+
+$$\boxed{v_2^{\rm decay}[d] = \frac{\displaystyle\sum_{m=0}^{N-1} A[d, m] \cdot v_2^\rho[m]}{{\rm norm}[d]}}$$
+
+The mother $v_2^\rho[m]$ is computed from the **same** NCQ formula evaluated at mother $p_T$:
+
+$$v_2^\rho[m] = v_2^u\!\left(\frac{p_{T,m}}{2}\right) + v_2^{\bar{u}}\!\left(\frac{p_{T,m}}{2}\right)$$
+
+No new free parameters — the $\rho$'s $v_2$ reuses the quark-level $v_2^q$ functions already in the model.
+
+### 7.6 Observed Pion as a Mixture
+
+The measured pion $v_2$ in daughter bin $d$ is:
+
+$$\boxed{v_2^{\rm obs}[d] = (1 - f_\rho) \cdot v_2^{\rm NCQ}[d] \;+\; f_\rho \cdot v_2^{\rm decay}[d]}$$
+
+where:
+- $v_2^{\rm NCQ}[d] = v_2^u(p_{T,d}/2) + v_2^{\bar{u}}(p_{T,d}/2)$ is the primary (direct) pion prediction
+- $f_\rho \sim {\rm Beta}(2, 10)$ is the fraction of observed pions originating from $\rho$ decays
+
+Both $v_2^{\rm NCQ}$ and $v_2^{\rm decay}$ are functions of the same quark $v_2$ parameters. The only new degree of freedom is $f_\rho$. The $p_T$-dependent shape correction is encoded in the precomputed matrices — not from extra fitting flexibility.
+
+### 7.7 Why This Fixes the Shape Mismatch
+
+**Low $p_T$ (0.18–0.34 GeV, residuals −15σ to −54σ):**
+$T_{v_2}[d,m]$ is small ($\sim 0$–$0.3$) because these daughters come from low-$p_T$ mothers where the decay kick dominates. Hence $v_2^{\rm decay}[d] \ll v_2^{\rm NCQ}[d]$, and:
+$$v_2^{\rm obs}[d] = (1 - f_\rho) \cdot v_2^{\rm NCQ}[d] + f_\rho \cdot (\text{diluted}) \;<\; v_2^{\rm NCQ}[d]$$
+The model prediction **drops**, fixing the overshoot.
+
+**Mid $p_T$ (0.4–0.8 GeV, residuals +8σ to +17σ):**
+$T_{v_2}[d,m]$ is intermediate ($\sim 0.3$–$0.7$). Without feed-down, the model compensated for the low-$p_T$ overshoot by distorting the NCQ parameters, creating an undershoot here. With $f_\rho$ providing the correct low-$p_T$ suppression, the NCQ parameters relax to their proper values — fixing the undershoot.
+
+**High $p_T$ (>0.9 GeV, already good fit):**
+$T_{v_2}[d,m] \to 1$ (daughters inherit mother $v_2$). Hence $v_2^{\rm decay}[d] \approx v_2^{\rm NCQ}[d]$, and:
+$$v_2^{\rm obs}[d] \approx v_2^{\rm NCQ}[d] \quad \text{regardless of } f_\rho$$
+No change to the already-good high-$p_T$ prediction.

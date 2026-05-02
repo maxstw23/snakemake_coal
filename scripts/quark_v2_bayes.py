@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Bayesian NCQ quark v2 extraction — mixture model.
+Bayesian NCQ quark v2 extraction — mixture model with S-curve pion correction.
 
-Simultaneously fits pi+/-, K+/-, p, pbar v2(pT) to extract latent quark
+Simultaneously fits π±, K±, p, p̄, Λ, Λ̄ v2(pT) to extract latent quark
 v2 functions under a physically motivated mixture decomposition:
 
   v2^u(p) = f_u * v2^tr(p) + (1 - f_u) * v2^prod(p)
@@ -18,22 +18,30 @@ f_u, f_d are parametrized via (f_bar_logit, delta_f):
 f_bar_logit ~ N(logit(tanh(μ_B/3T_ch)), f_sigma)  from GCE (arXiv:1701.07065).
 delta_f     ~ N(0, 0.3); delta_f>0 encodes f_d>f_u (Au neutron excess N>Z).
 
+Pion v2 includes an S-curve hadronic correction (difference of two exponentials)
+that absorbs ρ→ππ feed-down dilution and rescattering (see docs/experiments_2026-05-01.md):
+  v2^π(pT) = v2_NCQ(pT) + corr(pT) + ε_0^π
+  corr(pT) = A_fast·exp(-pT/τ_fast) - B_slow·exp(-pT/τ_slow)
+
 Parameters:
-  v2^tr:      5  (a_tr, b_tr, c_tr, d_tr, nu_tr)
-  f_bar_logit:1  (logit-normal, mean transported fraction)
-  delta_f:    1  (isospin asymmetry in logit space)
-  v2^prod:    5  (a_a,  b_a,  c_a,  d_a,  nu_a)
-  v2^s:       5  (a_s,  b_s,  c_s,  d_s,  nu_s)
-  eps0_pi:    1  (flat pion offset, N(0,0.05))
-  Total:     18
+  v2^tr:       5  (a_tr, b_tr, c_tr, d_tr, nu_tr)
+  f_bar_logit: 1  (logit-normal, mean transported fraction)
+  delta_f:     1  (isospin asymmetry in logit space)
+  v2^prod:     5  (a_a,  b_a,  c_a,  d_a,  nu_a)
+  v2^s:        5  (a_s,  b_s,  c_s,  d_s,  nu_s)
+  S-curve:     4  (A_fast, τ_fast, B_slow, τ_slow) — HalfNormal
+  eps0_pi:     1  (flat pion offset, N(0,0.02))
+  Total:      22
 
 NCQ coalescence:
-  v2^pi+(pT)  = v2^u(pT/2) + v2^ā(pT/2)
-  v2^pi-(pT)  = v2^ā(pT/2) + v2^d(pT/2)
-  v2^K+(pT)   = v2^u(pT/2) + v2^s(pT/2)
-  v2^K-(pT)   = v2^ā(pT/2) + v2^s(pT/2)
-  v2^p(pT)    = 2*v2^u(pT/3) + v2^d(pT/3)
-  v2^pbar(pT) = 3*v2^ā(pT/3)
+  v2^π+(pT)    = v2^u(pT/2) + v2^ā(pT/2) + corr(pT) + ε_0^π
+  v2^π-(pT)    = v2^ā(pT/2) + v2^d(pT/2) + corr(pT) + ε_0^π
+  v2^K+(pT)    = v2^u(pT/2) + v2^s(pT/2)
+  v2^K-(pT)    = v2^ā(pT/2) + v2^s(pT/2)
+  v2^p(pT)     = 2·v2^u(pT/3) + v2^d(pT/3)
+  v2^p̄(pT)     = 3·v2^ā(pT/3)
+  v2^Λ(pT)     = v2^u(pT/3) + v2^d(pT/3) + v2^s(pT/3)
+  v2^Λ̄(pT)     = 2·v2^ā(pT/3) + v2^s(pT/3)
 
 Usage (standalone):
   conda activate lambda_v1
@@ -88,9 +96,15 @@ DEFAULTS = dict(
 PT_BIN_WIDTH = 0.01
 N_BINS       = 500
 
-MESON_SPECIES  = ['piplus', 'piminus', 'kplus', 'kminus']
-BARYON_SPECIES = ['proton', 'antiproton']
-PARTICLES      = MESON_SPECIES + BARYON_SPECIES
+MESON_SPECIES   = ['piplus', 'piminus', 'kplus', 'kminus']
+BARYON_SPECIES  = ['proton', 'antiproton']
+LAMBDA_SPECIES  = ['lambda', 'lambdabar']
+V2_CSV_SPECIES  = MESON_SPECIES + BARYON_SPECIES
+PARTICLES       = V2_CSV_SPECIES + LAMBDA_SPECIES
+
+LAMBDA_PT_LO    = 0.45
+LAMBDA_PT_HI    = 1.75
+LAMBDA_N_BINS   = 14
 
 LABELS = {
     'piplus':     r'$\pi^+$',
@@ -99,11 +113,14 @@ LABELS = {
     'kminus':     r'$K^-$',
     'proton':     r'$p$',
     'antiproton': r'$\bar{p}$',
+    'lambda':     r'$\Lambda$',
+    'lambdabar':  r'$\bar{\Lambda}$',
 }
 COLORS = {
     'piplus': 'steelblue', 'piminus': 'darkorange',
     'kplus':  'forestgreen', 'kminus': 'firebrick',
     'proton': 'purple', 'antiproton': 'brown',
+    'lambda': 'darkred', 'lambdabar': 'darkcyan',
 }
 
 ENERGY_TO_SQRTS = {
@@ -186,14 +203,14 @@ def load_merged_v2(data_dir, cen_bins, ep, csv_prefix='v2_noeff_corrected'):
     pt_centers = (np.arange(N_BINS) + 0.5) * PT_BIN_WIDTH
     res_df     = pd.read_csv(data_dir / f'{csv_prefix}_res.csv')
 
-    sum_w  = {p: np.zeros(N_BINS) for p in PARTICLES}
-    sum_wv = {p: np.zeros(N_BINS) for p in PARTICLES}
+    sum_w  = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
+    sum_wv = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
 
     for cen in cen_bins:
         cen_df  = pd.read_csv(data_dir / f'{csv_prefix}_cen{cen}.csv')
         res_val = res_df.iloc[cen - 1][f'{ep}_res']
 
-        for p in PARTICLES:
+        for p in V2_CSV_SPECIES:
             v2_raw  = cen_df[f'{p}_v2_{ep}'].values
             err_raw = cen_df[f'{p}_v2_err_{ep}'].values
             v2_c    = v2_raw  / res_val
@@ -204,12 +221,53 @@ def load_merged_v2(data_dir, cen_bins, ep, csv_prefix='v2_noeff_corrected'):
             sum_wv[p] += w * v2_c
 
     v2_out, err_out = {}, {}
-    for p in PARTICLES:
+    for p in V2_CSV_SPECIES:
         good       = sum_w[p] > 0
         v2_out[p]  = np.where(good, sum_wv[p] / sum_w[p], np.nan)
         err_out[p] = np.where(good, 1.0 / np.sqrt(sum_w[p]), np.nan)
 
     return pt_centers, v2_out, err_out
+
+
+def load_lambda_v2(data_dir, cen_bins, ep):
+    """
+    Load Lambda/Lambdabar v2 from fit CSVs (output of fit_v2.py).
+
+    The fit CSVs have MultiIndex columns: (centrality, [values, errors, counts]).
+    Resolution correction is applied using the same v2_noeff_corrected_res.csv
+    as for other particles.
+
+    Returns (pt_lambda, v2_lambda, err_lambda, v2_lambdabar, err_lambdabar).
+    Each v2/err is a 1D array over the merged pT bins.
+    """
+    data_dir   = Path(data_dir)
+    res_df     = pd.read_csv(data_dir / 'v2_noeff_corrected_res.csv')
+    pt_lambda  = np.linspace(LAMBDA_PT_LO, LAMBDA_PT_HI, LAMBDA_N_BINS)
+
+    def _read_one(csv_path):
+        df = pd.read_csv(csv_path, header=[0, 1], index_col=0)
+        sum_w  = np.zeros(LAMBDA_N_BINS)
+        sum_wv = np.zeros(LAMBDA_N_BINS)
+        for cen in cen_bins:
+            cen_str = str(cen)
+            if cen_str not in df.columns.levels[0]:
+                continue
+            v2_raw  = df.loc[:, (cen_str, 'values')].values
+            err_raw = df.loc[:, (cen_str, 'errors')].values
+            res_val = res_df.iloc[cen - 1][f'{ep}_res']
+            v2_c    = v2_raw  / res_val
+            err_c   = err_raw / res_val
+            valid   = (err_c > 0) & np.isfinite(err_c) & np.isfinite(v2_c)
+            w       = np.where(valid, 1.0 / err_c**2, 0.0)
+            sum_w   += w
+            sum_wv  += w * v2_c
+        v2  = np.where(sum_w > 0, sum_wv / sum_w, np.nan)
+        err = np.where(sum_w > 0, 1.0 / np.sqrt(sum_w), np.nan)
+        return v2, err
+
+    v2_lam, err_lam = _read_one(data_dir / f'fit_Lambda_v2_{ep}.csv')
+    v2_lbr, err_lbr = _read_one(data_dir / f'fit_Lambdabar_v2_{ep}.csv')
+    return pt_lambda, v2_lam, err_lam, v2_lbr, err_lbr
 
 
 def prepare_datasets(pt_centers, v2_all, err_all, cfg):
@@ -240,7 +298,7 @@ def prepare_datasets(pt_centers, v2_all, err_all, cfg):
     return data
 
 
-def print_dataset_summary(data):
+def print_dataset_summary(data, lambda_data=None):
     print('\nDataset summary:')
     for sp, (pt, v2, err) in data.items():
         nq = 2 if sp in MESON_SPECIES else 3
@@ -248,6 +306,15 @@ def print_dataset_summary(data):
               f'pT=[{pt.min():.3f},{pt.max():.3f}]  '
               f'pT/nQ=[{pt.min()/nq:.3f},{pt.max()/nq:.3f}]  '
               f'v2=[{v2.min():.4f},{v2.max():.4f}]')
+    if lambda_data:
+        for sp, (pt, v2, err) in lambda_data.items():
+            nq = 3
+            good = np.isfinite(v2) & np.isfinite(err) & (err > 0)
+            v2g = v2[good]
+            print(f'  {sp:12s}: {len(pt):2d} bins  '
+                  f'pT=[{pt.min():.3f},{pt.max():.3f}]  '
+                  f'pT/nQ=[{pt.min()/nq:.3f},{pt.max()/nq:.3f}]  '
+                  f'v2=[{v2g.min():.4f},{v2g.max():.4f}]')
 
 # ── ρ feed-down precomputation (not currently used in model) ──────────────────
 
@@ -313,12 +380,69 @@ def build_rho_precomputed(data, T_kin=0.100, beta_avg=0.4,
     return result
 
 
+# ── Transfer cache loading ─────────────────────────────────────────────────────
+
+def _load_transfer_cache(data, energy, cache_dir='plots'):
+    """
+    Load the ρ→ππ transfer cache. Returns (A, norm_grid, W_data, pt_grid)
+    as numpy arrays, or None if cache missing.
+    """
+    cache_path = Path(cache_dir) / energy / 'rho_transfer_cache.npz'
+    if not cache_path.exists():
+        print(f'  [transfer] Cache not found: {cache_path}. No ρ correction available.')
+        return None
+    d = np.load(cache_path)
+    return d['A'], d['norm_grid'], d['W_data'], d['pt_grid']
+
+
+# ── D_eff / ΔpT_eff precomputation (Taylor expansion, kept for reference) ──────
+
+def _compute_deff_dpteff(data, energy, cache_dir='plots'):
+    """
+    Compute D_eff(pT) and ΔpT_eff(pT) from the ρ→ππ transfer cache,
+    interpolated to the pion data pT grid.
+
+    Returns (D_eff_data, dpt_eff_data) — each shape (n_pi_bins,).
+    """
+    cache_path = Path(cache_dir) / energy / 'rho_transfer_cache.npz'
+    if not cache_path.exists():
+        print(f'  [deff] Cache not found: {cache_path}. Using D_eff=1, dpt_eff=0 (no ρ correction).')
+        n_pi = len(data['piplus'][0])
+        return np.ones(n_pi), np.zeros(n_pi)
+
+    d = np.load(cache_path)
+    pt_grid   = d['pt_grid']    # (N,) mother bin centres
+    A         = d['A']          # (N,N) A[d,m] = T_v2[d,m] * s[m]
+    norm_grid = d['norm_grid']  # (N,)  norm[d] = sum_m T_yield[d,m] * s[m]
+    W_data    = d['W_data']     # (n_pi, N) interpolation grid -> data pT
+
+    safe_norm = np.where(norm_grid > 0, norm_grid, 1e-10)
+
+    # D_eff[d] = sum_m T_v2[d,m]*s[m] / sum_m T_yield[d,m]*s[m] = A.sum(1) / norm
+    D_eff_grid = np.maximum(A.sum(axis=1) / safe_norm, 0.0)
+
+    # ΔpT_eff[d] = sum_m A[d,m] * (pT_m - pT_d) / norm[d]
+    pT_diff = pt_grid[None, :] - pt_grid[:, None]     # (N, N): pT_m - pT_d
+    dpt_eff_grid = (A * pT_diff).sum(axis=1) / safe_norm
+
+    # Interpolate to data pT
+    D_eff_data   = np.maximum(W_data @ D_eff_grid, 0.0)
+    dpt_eff_data = W_data @ dpt_eff_grid
+
+    return D_eff_data, dpt_eff_data
+
+
 # ── Model ──────────────────────────────────────────────────────────────────────
 
-def build_model(data, cfg):
+def build_model(data, cfg, lambda_data=None):
     pT  = {sp: d[0] for sp, d in data.items()}
     v2  = {sp: d[1] for sp, d in data.items()}
     err = {sp: np.maximum(d[2], cfg['err_floor']) for sp, d in data.items()}
+    if lambda_data:
+        for sp, (pt_lam, v2_lam, err_lam) in lambda_data.items():
+            pT[sp]  = pt_lam
+            v2[sp]  = v2_lam
+            err[sp] = np.maximum(err_lam, cfg['err_floor'])
 
     f_prior    = cfg['f_prior']
     f_sigma    = cfg['f_prior_sigma']
@@ -329,6 +453,11 @@ def build_model(data, cfg):
         # ── Richards sigmoid helper (PyTensor) ────────────────────────────────
         def richards(p_arr, a, b, c, d, nu):
             return a / (1.0 + pt.exp(-(p_arr - b) / c)) ** (1.0 / nu) - d
+
+        def richards_prime(p_arr, a, b, c, d, nu):
+            """Derivative of Richards sigmoid w.r.t. p_arr."""
+            t = pt.exp(-(p_arr - b) / c)
+            return (a / (c * nu)) * t / (1.0 + t) ** (1.0 / nu + 1.0)
 
         # ── v2^prod: produced (anti)quarks, pinned by antiparticle data ───────
         a_a  = pm.HalfNormal('a_a',  sigma=0.15)
@@ -382,16 +511,39 @@ def build_model(data, cfg):
             elif flavor == 's':
                 return v2_s(p_arr)
 
-        # ── Pion offset (flat hadronic correction) ───────────────────────────
-        eps0_pi = pm.Normal('eps0_pi', mu=0.0, sigma=0.05)
+        def qv2_prime(p_arr, flavor):
+            """Derivative of quark v2 w.r.t. quark pT."""
+            if flavor == 'u':
+                return f_u * richards_prime(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr) + \
+                       (1.0 - f_u) * richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
+            elif flavor == 'd':
+                return f_d * richards_prime(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr) + \
+                       (1.0 - f_d) * richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
+            elif flavor == 'a':
+                return richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
+            elif flavor == 's':
+                return richards_prime(p_arr, a_s, b_s, c_s, d_s, nu_s)
 
-        # ── Likelihood ────────────────────────────────────────────────────────
+        # ── S-curve pion correction (difference of two exponentials) ─────────
+        # See docs/experiments_2026-05-01.md attempt 7.
+        A_fast   = pm.HalfNormal('A_fast',   sigma=0.10)
+        tau_fast = pm.HalfNormal('tau_fast', sigma=1.50)
+        B_slow   = pm.HalfNormal('B_slow',   sigma=0.20)
+        tau_slow = pm.HalfNormal('tau_slow', sigma=1.00)
+
+        def s_curve(p_arr):
+            return A_fast * pt.exp(-p_arr / tau_fast) - B_slow * pt.exp(-p_arr / tau_slow)
+
+        # ── Flat pion offset ─────────────────────────────────────────────────
+        eps0_pi = pm.Normal('eps0_pi', mu=0.0, sigma=0.02)
+
+        # ── Likelihood (all species except pions get pure NCQ) ───────────────
         def ncq_pred(sp):
             p = pT[sp]
             if sp == 'piplus':
-                return qv2(p/2, 'u') + qv2(p/2, 'a') + eps0_pi
+                return qv2(p/2, 'u') + qv2(p/2, 'a') + s_curve(p) + eps0_pi
             elif sp == 'piminus':
-                return qv2(p/2, 'a') + qv2(p/2, 'd') + eps0_pi
+                return qv2(p/2, 'a') + qv2(p/2, 'd') + s_curve(p) + eps0_pi
             elif sp == 'kplus':
                 return qv2(p/2, 'u') + qv2(p/2, 's')
             elif sp == 'kminus':
@@ -400,8 +552,15 @@ def build_model(data, cfg):
                 return 2*qv2(p/3, 'u') + qv2(p/3, 'd')
             elif sp == 'antiproton':
                 return 3*qv2(p/3, 'a')
+            elif sp == 'lambda':
+                return qv2(p/3, 'u') + qv2(p/3, 'd') + qv2(p/3, 's')
+            elif sp == 'lambdabar':
+                return 2*qv2(p/3, 'a') + qv2(p/3, 's')
 
-        for sp in PARTICLES:
+        FIT_SPECIES = ['piplus', 'piminus', 'kplus', 'kminus', 'proton', 'antiproton']
+        if lambda_data:
+            FIT_SPECIES += ['lambda', 'lambdabar']
+        for sp in FIT_SPECIES:
             pm.Normal(f'obs_{sp}', mu=ncq_pred(sp), sigma=err[sp], observed=v2[sp])
 
     return model
@@ -412,6 +571,11 @@ def _richards_np(p_grid, a, b, c, d, nu):
     """Vectorized Richards sigmoid: shapes (S,) params, (N,) p_grid → (S, N)."""
     return (a[:,None] / (1 + np.exp(-(p_grid[None,:] - b[:,None]) / c[:,None]))
             ** (1.0 / nu[:,None]) - d[:,None])
+
+def _richards_prime_np(p_grid, a, b, c, d, nu):
+    """Vectorized Richards sigmoid derivative: shapes (S,) params, (N,) p_grid → (S, N)."""
+    t = np.exp(-(p_grid[None,:] - b[:,None]) / c[:,None])
+    return (a[:,None] / (c[:,None] * nu[:,None])) * t / (1.0 + t) ** (1.0 / nu[:,None] + 1.0)
 
 
 def _flat(post, name):
@@ -477,18 +641,45 @@ def eval_pion_decay_posterior(trace, rho, p_query):
     return v2_decay_grid @ W.T                                # (S, n_query)
 
 
-def hadron_pred_posterior(trace, sp, pT_arr):
+def _s_curve_np(p, post):
+    return (_flat(post, 'A_fast')[:,None] * np.exp(-p[None,:] / _flat(post, 'tau_fast')[:,None])
+            - _flat(post, 'B_slow')[:,None] * np.exp(-p[None,:] / _flat(post, 'tau_slow')[:,None]))
+
+
+def hadron_pred_posterior(trace, sp, pT_arr, rho_cache=None):
     p = pT_arr
     post = trace.posterior
+
     ncq_map = {
-        'piplus':     lambda: eval_quark_v2_posterior(trace,'u',p/2) + eval_quark_v2_posterior(trace,'a',p/2) + _flat(post,'eps0_pi')[:,None],
-        'piminus':    lambda: eval_quark_v2_posterior(trace,'a',p/2) + eval_quark_v2_posterior(trace,'d',p/2) + _flat(post,'eps0_pi')[:,None],
+        'piplus':     lambda: (eval_quark_v2_posterior(trace,'u',p/2)
+                               + eval_quark_v2_posterior(trace,'a',p/2)
+                               + _s_curve_np(p, post)
+                               + _flat(post, 'eps0_pi')[:,None]),
+        'piminus':    lambda: (eval_quark_v2_posterior(trace,'a',p/2)
+                               + eval_quark_v2_posterior(trace,'d',p/2)
+                               + _s_curve_np(p, post)
+                               + _flat(post, 'eps0_pi')[:,None]),
         'kplus':      lambda: eval_quark_v2_posterior(trace,'u',p/2) + eval_quark_v2_posterior(trace,'s',p/2),
         'kminus':     lambda: eval_quark_v2_posterior(trace,'a',p/2) + eval_quark_v2_posterior(trace,'s',p/2),
         'proton':     lambda: 2*eval_quark_v2_posterior(trace,'u',p/3) + eval_quark_v2_posterior(trace,'d',p/3),
         'antiproton': lambda: 3*eval_quark_v2_posterior(trace,'a',p/3),
+        'lambda':     lambda: eval_quark_v2_posterior(trace,'u',p/3) + eval_quark_v2_posterior(trace,'d',p/3) + eval_quark_v2_posterior(trace,'s',p/3),
+        'lambdabar':  lambda: 2*eval_quark_v2_posterior(trace,'a',p/3) + eval_quark_v2_posterior(trace,'s',p/3),
     }
     return ncq_map[sp]()
+
+
+def _interp_deff_to_pT(pT_query, pt_grid, D_eff_grid, dpt_eff_grid):
+    """Interpolate D_eff and dpt_eff from grid to query pT values."""
+    from scipy.interpolate import interp1d
+    valid = np.isfinite(D_eff_grid) & np.isfinite(dpt_eff_grid)
+    D_interp = interp1d(pt_grid[valid], D_eff_grid[valid], kind='linear',
+                         bounds_error=False, fill_value=(D_eff_grid[valid][0],
+                                                          D_eff_grid[valid][-1]))
+    dpt_interp = interp1d(pt_grid[valid], dpt_eff_grid[valid], kind='linear',
+                           bounds_error=False, fill_value=(dpt_eff_grid[valid][0],
+                                                            dpt_eff_grid[valid][-1]))
+    return D_interp(pT_query), dpt_interp(pT_query)
 
 
 def pct_band(curves, ax, x, color, zorder=1, alpha_fill=0.25):
@@ -560,15 +751,14 @@ def plot_transported_signal(trace, out_dir, energy, cfg):
     ax0.legend(fontsize=10)
     ax0.set_xlim(0.08, 1.00)
 
-    # Panel 1: isospin signal (f_d - f_u) * (v2^tr - v2^prod)
-    # This is the NCQ prediction for v2(pi-) - v2(pi+) from quark transport asymmetry.
+    # Panel 1: transported excess v2^tr - v2^prod
     ax1 = axes[1]
-    iso_signal = (fd_samples - fu_samples)[:,None] * (tr_curves - prod_curves)
-    pct_band(iso_signal, ax1, p_grid, 'darkorchid')
-    ax1.axhline(0, color='k', lw=1, ls='--')
+    diff_curves = tr_curves - prod_curves
+    pct_band(diff_curves, ax1, p_grid, 'darkred', alpha_fill=0.3)
+    ax1.axhline(0, color='k', lw=0.5, ls='--', alpha=0.5)
     ax1.set_xlabel(r'$p_T/n_q$ (GeV/$c$)', fontsize=11)
-    ax1.set_ylabel(r'$(f_d - f_u)(v_2^{\rm tr} - v_2^{\rm prod})$', fontsize=11)
-    ax1.set_title(r'Isospin signal: $\Delta v_2^{\pi^-\!-\!\pi^+}$ (quark level)', fontsize=11)
+    ax1.set_ylabel(r'$v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=11)
+    ax1.set_title(r'Transported excess: $v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=11)
     ax1.set_xlim(0.08, 1.00)
 
     # Panel 2: f_u and f_d posteriors overlaid, with prior mean marked
@@ -594,26 +784,35 @@ def plot_transported_signal(trace, out_dir, energy, cfg):
     print('  Saved transported_signal.pdf')
 
 
-def plot_posterior_predictive(trace, data, out_dir, energy):
+def plot_posterior_predictive(trace, data, out_dir, energy, lambda_data=None):
+    n_plot = len(PARTICLES)
+    ncols = 4
+    nrows = 2
     p_fine = np.linspace(0.05, 3.2, 800)
-    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 9))
     axes = axes.flatten()
-    for ax, sp in zip(axes, PARTICLES):
-        pT_d, v2_d, err_d = data[sp]
+    for idx, sp in enumerate(PARTICLES):
+        ax = axes[idx]
+        if sp in data:
+            pT_d, v2_d, err_d = data[sp]
+        elif lambda_data and sp in lambda_data:
+            pT_d, v2_d, err_d = lambda_data[sp]
+        else:
+            continue
         col    = COLORS[sp]
         curves = hadron_pred_posterior(trace, sp, p_fine)
         pct_band(curves, ax, p_fine, col)
         ax.errorbar(pT_d, v2_d, yerr=err_d, fmt='o', color='k',
                     ms=4, capsize=2, lw=1, label='Data', zorder=10)
-
-        # χ²/dof using posterior median evaluated at data points
         pred_at_data = hadron_pred_posterior(trace, sp, pT_d)
         pred_med     = np.median(pred_at_data, axis=0)
-        chi2         = np.sum(((v2_d - pred_med) / err_d) ** 2)
-        dof          = len(pT_d)
-        ax.text(0.97, 0.05, fr'$\chi^2/N={chi2/dof:.1f}$ ({dof})',
-                transform=ax.transAxes, ha='right', va='bottom', fontsize=9,
-                color='dimgray')
+        valid        = np.isfinite(v2_d) & np.isfinite(err_d) & np.isfinite(pred_med) & (err_d > 0)
+        if valid.sum() > 0:
+            chi2 = np.sum(((v2_d[valid] - pred_med[valid]) / err_d[valid]) ** 2)
+            dof  = valid.sum()
+            ax.text(0.97, 0.05, fr'$\chi^2/N={chi2/dof:.1f}$ ({dof})',
+                    transform=ax.transAxes, ha='right', va='bottom', fontsize=9,
+                    color='dimgray')
 
         ax.set_xlabel(r'$p_T$ (GeV/$c$)', fontsize=11)
         ax.set_ylabel(r'$v_2$', fontsize=11)
@@ -622,6 +821,9 @@ def plot_posterior_predictive(trace, data, out_dir, energy):
         ax.set_xlim(0, xlim)
         ax.set_ylim(bottom=-0.01)
         ax.legend(fontsize=9)
+    # Hide unused axes if any
+    for idx in range(len(PARTICLES), len(axes)):
+        axes[idx].set_visible(False)
     fig.suptitle(
         f'Posterior predictive check — Au+Au $\\sqrt{{s_{{NN}}}}$={energy_label(energy)}, 10–40%',
         fontsize=13)
@@ -697,12 +899,23 @@ def main():
     print('\n=== Loading data ===')
     pt_centers, v2_all, err_all = load_merged_v2(data_dir, cen_bins, ep, args.csv_prefix)
 
+    print('\n=== Loading Lambda/Lambdabar data ===')
+    try:
+        pt_lam, v2_lam, err_lam, v2_lbr, err_lbr = load_lambda_v2(data_dir, cen_bins, ep)
+        lambda_data = {
+            'lambda':    (pt_lam, v2_lam, err_lam),
+            'lambdabar': (pt_lam, v2_lbr, err_lbr),
+        }
+    except (FileNotFoundError, KeyError):
+        print('  No Lambda/Lambdabar fit data found; skipping Lambda predictions.')
+        lambda_data = None
+
     print('\n=== Preparing datasets ===')
     data = prepare_datasets(pt_centers, v2_all, err_all, cfg)
-    print_dataset_summary(data)
+    print_dataset_summary(data, lambda_data)
 
     print('\n=== Building model ===')
-    model = build_model(data, cfg)
+    model = build_model(data, cfg, lambda_data)
 
     print('\n=== Sampling ===')
     with model:
@@ -718,7 +931,8 @@ def main():
         ['a_tr', 'b_tr', 'c_tr', 'd_tr', 'nu_tr'] +
         ['a_a',  'b_a',  'c_a',  'd_a',  'nu_a']  +
         ['a_s',  'b_s',  'c_s',  'd_s',  'nu_s']  +
-        ['f_bar', 'delta_f', 'eps0_pi']
+        ['f_bar', 'delta_f', 'eps0_pi'] +
+        ['A_fast', 'tau_fast', 'B_slow', 'tau_slow']
     )
     hier_names = []
     summary    = az.summary(trace, var_names=param_names + hier_names)
@@ -738,7 +952,7 @@ def main():
     print('\n=== Generating plots ===')
     plot_quark_v2_functions(trace, out_dir, energy)
     plot_transported_signal(trace, out_dir, energy, cfg)
-    plot_posterior_predictive(trace, data, out_dir, energy)
+    plot_posterior_predictive(trace, data, out_dir, energy, lambda_data)
     plot_quark_comparison(trace, out_dir, energy)
 
     print(f'\nDone. Output in {out_dir}/')

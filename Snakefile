@@ -390,9 +390,11 @@ rule quark_v2_all:
 
 rule quark_v2_bayes:
     input:
-        script = 'scripts/quark_v2_bayes.py',
-        v2     = lambda wildcards: [v2_csv('0', wildcards.energy, f'_cen{cen}') for cen in [5, 6, 7]],
-        res    = lambda wildcards: v2_csv('0', wildcards.energy, '_res')
+        script   = 'scripts/quark_v2_bayes.py',
+        v2       = lambda wildcards: [v2_csv('0', wildcards.energy, f'_cen{cen}') for cen in [5, 6, 7]],
+        res      = lambda wildcards: v2_csv('0', wildcards.energy, '_res'),
+        lambda_v2  = lambda wildcards: f'result/sys_tag_0/energy_{wildcards.energy}/fit_Lambda_v2_EPD.csv',
+        lambdabar_v2 = lambda wildcards: f'result/sys_tag_0/energy_{wildcards.energy}/fit_Lambdabar_v2_EPD.csv',
     output:
         'plots/{energy}/quark_v2_functions.pdf',
         'plots/{energy}/quark_v2_comparison.pdf',
