@@ -94,6 +94,36 @@ plot_config = {
     }
 }
 
+# Cross-energy systematic covariance (docs/systematic_covariance.md).
+# sys_tag 1 = |Vz| cut: its definition changes by energy regime (|Vz|<145/70 cm
+#   default, <70/35 cm at 19.6 & 27 GeV), so it is split into two independent
+#   sources -> vz is correlated WITHIN each regime group but not across them.
+# sys_tag 2 = Nfit cut: identical at all energies -> single fully-correlated source.
+SYS_REGIME_SPLITS = {1: [[19.6, 27.0], [7.7, 9.2, 11.5, 14.6, 17.3]]}
+
+
+def build_sys_covariance(energy_float, source_contrib, splits=SYS_REGIME_SPLITS):
+    """Per-source systematic covariance V_sys = sum_s s_s s_s^T over energies.
+
+    source_contrib: {sys_tag: array of signed contributions over energy_float}.
+    Each source is treated as 100% correlated across energies, except sources listed
+    in `splits`, which are broken into independent per-group sources (block structure).
+    The diagonal equals sum_s contrib^2 = yerr_sys^2, so this only adds off-diagonals.
+    """
+    n = len(energy_float)
+    V = np.zeros((n, n))
+    for tag, contrib in source_contrib.items():
+        contrib = np.asarray(contrib, dtype=float)
+        for group in splits.get(tag, [None]):
+            if group is None:
+                vec = contrib.copy()
+            else:
+                in_g = np.array([any(abs(e - ge) < 0.05 for ge in group) for e in energy_float])
+                vec = np.where(in_g, contrib, 0.0)
+            V += np.outer(vec, vec)
+    return V
+
+
 def find_files(input_files, key):
     for f in input_files:
         if key in f:
@@ -276,14 +306,18 @@ def plot_ratio(dict_input, figs, paper_plot_path):
             with open(files[EP][i], 'r') as f:
                 data_dict = yaml.load(f, Loader=yaml.CLoader)
             x = np.array(data_dict['x'])
-            ratio = unumpy.uarray(data_dict['y'], data_dict['yerr_stat'])
+            # C1: toy-MC central + ASYMMETRIC stat error bars (fallback to symmetric for old
+            # yamls). Sys band stays symmetric. See docs/ratio_statistics.md.
+            y_cen = np.array(data_dict.get('y_toymc', data_dict['y']))
+            stat_lo = np.array(data_dict.get('yerr_stat_lo', data_dict['yerr_stat']))
+            stat_hi = np.array(data_dict.get('yerr_stat_hi', data_dict['yerr_stat']))
             err_sys = np.array(data_dict['yerr_sys'])
 
             shift = 1. if EP == 'TPC' else -1.
-            ax_coal[i].errorbar(x+shift, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), **marker_styles[EP])
+            ax_coal[i].errorbar(x+shift, y_cen, yerr=[stat_lo, stat_hi], **marker_styles[EP])
             for j in range(len(x)):
-                ax_coal[i].fill_between(np.array([x[j]-0.5, x[j]+0.5])+shift, 
-                                        unumpy.nominal_values(ratio)[j]-err_sys[j], unumpy.nominal_values(ratio)[j]+err_sys[j], color=marker_styles[EP]['color'], alpha=0.3)
+                ax_coal[i].fill_between(np.array([x[j]-0.5, x[j]+0.5])+shift,
+                                        y_cen[j]-err_sys[j], y_cen[j]+err_sys[j], color=marker_styles[EP]['color'], alpha=0.3)
             ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
             ax_coal[i].set_xlim(-5, 85)
             lb, rb = ax_coal[i].get_xlim()
@@ -639,6 +673,9 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     err_sys_1040 = {}
     err_sys_1040['TPC'] = np.zeros(len(files['TPC']))
     err_sys_1040['EPD'] = np.zeros(len(files['EPD']))
+    # signed per-source systematic contributions, {EP: {sys_tag: array over energies}}
+    n_e = len(files['TPC'])
+    source_contrib = {'TPC': {}, 'EPD': {}}
 
     for i, f in enumerate(files['TPC']):
         energy = f.split('/')[-2].split('_')[1].replace('p', '.')
@@ -647,6 +684,8 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
                 data_dict = yaml.load(f, Loader=yaml.CLoader)
             ratio_1040[EP][i] = ufloat(data_dict['y_1040'], data_dict['yerr_stat_1040'])
             err_sys_1040[EP][i] = data_dict['yerr_sys_1040']
+            for tag, c in data_dict.get('sys_sources_1040', {}).items():
+                source_contrib[EP].setdefault(int(tag), np.zeros(n_e))[i] = float(c)
 
 
     energy_str = [f.split('/')[-2].split('_')[1].replace('p', '.') for f in files['TPC']]
@@ -664,23 +703,49 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
         if energy_float[j] >= 14.6:
             ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) - shift, 
                                 unumpy.nominal_values(ratio_1040['EPD'])[j]-err_sys_1040['EPD'][j], unumpy.nominal_values(ratio_1040['EPD'])[j]+err_sys_1040['EPD'][j], color='C1', alpha=0.3)
-    # chi2/ndf comparing to expectation 315/276
+    # chi2/ndf comparing to expectation 315/276, using FULL uncertainty with the
+    # cross-energy systematic covariance V = diag(stat^2) + V_sys, where
+    # V_sys = sum_s s_s s_s^T from the per-source signed contributions
+    # (sys_sources_1040; docs/systematic_covariance.md). Fixed reference (no free
+    # params) -> ndf = N points (docs/stats_review.md M15). The diagonal-only
+    # (sys uncorrelated) chi2 is also printed for comparison.
     expectation = 315 / 276
-    for EP in ['TPC', 'EPD']:
-        mask = np.ones(len(energy_float), dtype=bool) if EP == 'TPC' else (energy_float >= 14.6)
-        vals = unumpy.nominal_values(ratio_1040[EP])[mask]
-        errs = unumpy.std_devs(ratio_1040[EP])[mask]
-        chi2 = np.sum((vals - expectation)**2 / errs**2)
-        ndf = len(vals)
-        print(f'energy_dep chi2/ndf ({EP} vs 315/276): {chi2:.2f}/{ndf} = {chi2/ndf:.2f}')
 
-    chi2_tpc = np.sum((unumpy.nominal_values(ratio_1040['TPC']) - expectation)**2 / unumpy.std_devs(ratio_1040['TPC'])**2)
-    ndf_tpc = len(ratio_1040['TPC'])
-    mask_epd = energy_float >= 14.6
-    chi2_epd = np.sum((unumpy.nominal_values(ratio_1040['EPD'])[mask_epd] - expectation)**2 / unumpy.std_devs(ratio_1040['EPD'])[mask_epd]**2)
-    ndf_epd = int(np.sum(mask_epd))
-    ax_dep.annotate(fr'TPC $\chi^2$/ndf = {chi2_tpc:.1f}/{ndf_tpc}', xy=(0.05, 0.82), fontsize=13, xycoords='axes fraction')
-    ax_dep.annotate(fr'EPD $\chi^2$/ndf = {chi2_epd:.1f}/{ndf_epd}', xy=(0.05, 0.74), fontsize=13, xycoords='axes fraction')
+    def _chi2_diag(EP, keep):
+        vals = unumpy.nominal_values(ratio_1040[EP])[keep]
+        stat = unumpy.std_devs(ratio_1040[EP])[keep]
+        sys = err_sys_1040[EP][keep]
+        chi2 = float(np.sum((vals - expectation) ** 2 / (stat ** 2 + sys ** 2)))
+        return chi2, int(np.count_nonzero(keep))
+
+    def _chi2_cov(EP, keep):
+        idx = np.where(keep)[0]
+        delta = unumpy.nominal_values(ratio_1040[EP])[idx] - expectation
+        stat = unumpy.std_devs(ratio_1040[EP])[idx]
+        if source_contrib[EP]:
+            Vsys = build_sys_covariance(energy_float, source_contrib[EP])[np.ix_(idx, idx)]
+        else:  # per-source info unavailable (old yaml) -> fall back to diagonal sys
+            Vsys = np.diag(err_sys_1040[EP][idx] ** 2)
+        V = np.diag(stat ** 2) + Vsys
+        return float(delta @ np.linalg.solve(V, delta)), len(idx)
+
+    tpc_all = np.ones(len(energy_float), dtype=bool)
+    tpc_no77 = tpc_all & (np.abs(energy_float - 7.7) > 0.05)
+    epd_mask = energy_float >= 14.6
+    masks = [('TPC', 'TPC', tpc_all),
+             ('TPC excl 7.7', 'TPC', tpc_no77),
+             ('EPD', 'EPD', epd_mask)]
+    chi2_res = {}
+    for tag, EP, keep in masks:
+        cd, n = _chi2_diag(EP, keep)
+        cc, _ = _chi2_cov(EP, keep)
+        chi2_res[tag] = (cc, n)
+        print(f'energy_dep chi2/ndf ({tag} vs 315/276): '
+              f'diagonal {cd:.2f}/{n}={cd/n:.2f}  |  covariance {cc:.2f}/{n}={cc/n:.2f}')
+
+    ax_dep.annotate(fr'TPC $\chi^2$/ndf = {chi2_res["TPC"][0]:.1f}/{chi2_res["TPC"][1]}', xy=(0.05, 0.82), fontsize=13, xycoords='axes fraction')
+    ax_dep.annotate(fr'TPC (excl. 7.7 GeV) $\chi^2$/ndf = {chi2_res["TPC excl 7.7"][0]:.1f}/{chi2_res["TPC excl 7.7"][1]}', xy=(0.05, 0.74), fontsize=13, xycoords='axes fraction')
+    ax_dep.annotate(fr'EPD $\chi^2$/ndf = {chi2_res["EPD"][0]:.1f}/{chi2_res["EPD"][1]}', xy=(0.05, 0.66), fontsize=13, xycoords='axes fraction')
 
     ax_dep.annotate(r'AuAu, 10-40%', xy=(0.05, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
     ax_dep.set_xlabel(r'$\sqrt{s_{\text{NN}}}$ (GeV)', fontsize=15)

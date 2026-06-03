@@ -49,6 +49,11 @@ def main(default, regular_sys, special_sys, output, energy):
     new_yerr_combined = np.zeros(3)
     yerr_stat_combined = np.zeros(3)
     yerr_sys_combined = np.zeros(3)
+    # Signed per-source contributions s_s = sign(delta)*sqrt((delta^2 - delta_err^2)/3),
+    # kept per combined bin so a cross-energy systematic covariance can be assembled
+    # downstream (V_sys = sum_s s_s s_s^T; see docs/systematic_covariance.md). 0 if the
+    # source fails the Barlow gate. sum_s s_s^2 reproduces yerr_sys^2 exactly.
+    sys_sources_combined = {cb: {} for cb in ['010', '1040', '4080']}
     for i, cb in enumerate(['010', '1040', '4080']):
         print(f'Centrality bin: {cb}')
         print('\t           Default')
@@ -62,22 +67,38 @@ def main(default, regular_sys, special_sys, output, energy):
             # significance = abs(delta) / delta_err if delta_err != 0 else 0
             significance = (delta_err < delta)
             print(f'\t{int(sys_tag):<10} {delta_signed:<10.4f} {delta_err:<10.4f} {significance}')
+            contrib = 0.0
             if significance:
                 sum_of_unc += delta**2 - delta_err**2
+                contrib = float(np.sign(delta_signed) * np.sqrt((delta**2 - delta_err**2) / 3.0))
+            sys_sources_combined[cb][int(sys_tag)] = contrib
         print(f'\tTotal systematic uncertainty: {np.sqrt(sum_of_unc / 3):.4f}')
         new_yerr_combined[i] = np.sqrt(default_cut['yerr_' + cb]**2 + sum_of_unc / 3)
         yerr_stat_combined[i] = default_cut['yerr_' + cb]
         yerr_sys_combined[i] = np.sqrt(sum_of_unc / 3)
+
+    # C1: asymmetric per-cen total = asymmetric stat (toy-MC, from the default cut) ⊕ sys
+    # per side. Used for the per-cen paper ratio plot. Merged bins stay symmetric (well
+    # determined; also keeps the energy_dep χ² inputs symmetric). Falls back to symmetric.
+    stat_lo = np.array(default_cut.get('yerr_toymc_lo', default_cut['yerr']))
+    stat_hi = np.array(default_cut.get('yerr_toymc_hi', default_cut['yerr']))
+    new_yerr_lo = np.sqrt(stat_lo**2 + yerr_sys**2)
+    new_yerr_hi = np.sqrt(stat_hi**2 + yerr_sys**2)
 
     with open(output, 'w') as f:
         # basically use default_cut, but replace yerr with new_yerr
         default_cut['yerr'] = new_yerr.tolist()
         default_cut['yerr_stat'] = yerr_stat.tolist()
         default_cut['yerr_sys'] = yerr_sys.tolist()
+        default_cut['yerr_stat_lo'] = stat_lo.tolist()
+        default_cut['yerr_stat_hi'] = stat_hi.tolist()
+        default_cut['yerr_lo'] = new_yerr_lo.tolist()
+        default_cut['yerr_hi'] = new_yerr_hi.tolist()
         for i, cb in enumerate(['010', '1040', '4080']):
             default_cut['yerr_' + cb] = new_yerr_combined[i]
             default_cut['yerr_stat_' + cb] = yerr_stat_combined[i]
             default_cut['yerr_sys_' + cb] = yerr_sys_combined[i]
+            default_cut['sys_sources_' + cb] = sys_sources_combined[cb]
         yaml.dump(default_cut, f)
 
 if __name__ == '__main__':

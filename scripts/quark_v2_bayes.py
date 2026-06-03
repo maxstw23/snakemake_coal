@@ -5,18 +5,17 @@ Bayesian NCQ quark v2 extraction — mixture model with S-curve pion correction.
 Simultaneously fits π±, K±, p, p̄, Λ, Λ̄ v2(pT) to extract latent quark
 v2 functions under a physically motivated mixture decomposition:
 
-  v2^u(p) = f_u * v2^tr(p) + (1 - f_u) * v2^prod(p)
-  v2^d(p) = f_d * v2^tr(p) + (1 - f_d) * v2^prod(p)
+  v2^u(p) = f * v2^tr(p) + (1 - f) * v2^prod(p)
+  v2^d(p) = f * v2^tr(p) + (1 - f) * v2^prod(p)         [f_d = f_u = f]
   v2^ā(p) = v2^prod(p)                                   [identity]
   v2^s(p) = independent Richards sigmoid
 
 v2^prod is a fully independent Richards sigmoid, pinned by antiparticle data.
 v2^tr   is a fully independent Richards sigmoid for transported quarks.
-f_u, f_d are parametrized via (f_bar_logit, delta_f):
-  f_u = sigmoid(f_bar_logit - delta_f/2)
-  f_d = sigmoid(f_bar_logit + delta_f/2)
-f_bar_logit ~ N(logit(tanh(μ_B/3T_ch)), f_sigma)  from GCE (arXiv:1701.07065).
-delta_f     ~ N(0, 0.3); delta_f>0 encodes f_d>f_u (Au neutron excess N>Z).
+f is the transported fraction shared by u and d (isospin asymmetry ignored
+for now):
+  f = sigmoid(f_logit)
+f_logit ~ N(logit(tanh(μ_B/3T_ch)), f_sigma)  from GCE (arXiv:1701.07065).
 
 Pion v2 includes an S-curve hadronic correction (difference of two exponentials)
 that absorbs ρ→ππ feed-down dilution and rescattering (see docs/experiments_2026-05-01.md):
@@ -25,13 +24,12 @@ that absorbs ρ→ππ feed-down dilution and rescattering (see docs/experiments
 
 Parameters:
   v2^tr:       5  (a_tr, b_tr, c_tr, d_tr, nu_tr)
-  f_bar_logit: 1  (logit-normal, mean transported fraction)
-  delta_f:     1  (isospin asymmetry in logit space)
+  f_logit:     1  (logit-normal, transported fraction shared by u and d)
   v2^prod:     5  (a_a,  b_a,  c_a,  d_a,  nu_a)
   v2^s:        5  (a_s,  b_s,  c_s,  d_s,  nu_s)
   S-curve:     4  (A_fast, τ_fast, B_slow, τ_slow) — HalfNormal
   eps0_pi:     1  (flat pion offset, N(0,0.02))
-  Total:      22
+  Total:      21
 
 NCQ coalescence:
   v2^π+(pT)    = v2^u(pT/2) + v2^ā(pT/2) + corr(pT) + ε_0^π
@@ -203,8 +201,14 @@ def load_merged_v2(data_dir, cen_bins, ep, csv_prefix='v2_noeff_corrected'):
     pt_centers = (np.arange(N_BINS) + 0.5) * PT_BIN_WIDTH
     res_df     = pd.read_csv(data_dir / f'{csv_prefix}_res.csv')
 
-    sum_w  = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
-    sum_wv = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
+    # Counts (yield) weighting across centralities, matching the main ratio pipeline
+    # (M13): merging distinct centralities estimates the yield-weighted average v2, so the
+    # weight is the particle count, not 1/err^2 (the latter would bias toward small-error bins
+    # and does not correspond to any physical average). Counts-weighted-mean error:
+    # sigma = sqrt(sum (w*err)^2) / sum w.
+    sum_w   = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
+    sum_wv  = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
+    sum_w2e2 = {p: np.zeros(N_BINS) for p in V2_CSV_SPECIES}
 
     for cen in cen_bins:
         cen_df  = pd.read_csv(data_dir / f'{csv_prefix}_cen{cen}.csv')
@@ -213,18 +217,21 @@ def load_merged_v2(data_dir, cen_bins, ep, csv_prefix='v2_noeff_corrected'):
         for p in V2_CSV_SPECIES:
             v2_raw  = cen_df[f'{p}_v2_{ep}'].values
             err_raw = cen_df[f'{p}_v2_err_{ep}'].values
+            cnt     = cen_df[f'{p}_counts'].values
             v2_c    = v2_raw  / res_val
             err_c   = err_raw / res_val
-            valid   = (err_c > 0) & np.isfinite(err_c) & np.isfinite(v2_c)
-            w = np.where(valid, 1.0 / err_c**2, 0.0)
-            sum_w[p]  += w
-            sum_wv[p] += w * v2_c
+            valid   = (err_c > 0) & np.isfinite(err_c) & np.isfinite(v2_c) & (cnt > 0)
+            w = np.where(valid, cnt, 0.0)
+            sum_w[p]    += w
+            sum_wv[p]   += w * v2_c
+            sum_w2e2[p] += (w * err_c) ** 2
 
     v2_out, err_out = {}, {}
     for p in V2_CSV_SPECIES:
         good       = sum_w[p] > 0
-        v2_out[p]  = np.where(good, sum_wv[p] / sum_w[p], np.nan)
-        err_out[p] = np.where(good, 1.0 / np.sqrt(sum_w[p]), np.nan)
+        denom      = np.where(good, sum_w[p], 1.0)
+        v2_out[p]  = np.where(good, sum_wv[p] / denom, np.nan)
+        err_out[p] = np.where(good, np.sqrt(sum_w2e2[p]) / denom, np.nan)
 
     return pt_centers, v2_out, err_out
 
@@ -479,16 +486,12 @@ def build_model(data, cfg, lambda_data=None):
         def v2_tr(p_arr):
             return richards(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr)
 
-        # ── Isospin-asymmetric mixing fractions f_u, f_d ─────────────────────
-        # Au+Au has a neutron excess (N>Z), so f_d > f_u in general.
-        # Parametrize as: f_bar_logit (mean) + delta_f (asymmetry in logit space).
-        # Prior: logit(f_bar) ~ N(logit(tanh(μ_B/3T_ch)), f_sigma).
-        #        delta_f       ~ N(0, 0.3) — weakly regularized; delta_f>0 ↔ f_d>f_u.
-        f_bar_logit = pm.Normal('f_bar_logit', mu=f_logit_mu, sigma=f_sigma)
-        delta_f     = pm.Normal('delta_f', mu=0.0, sigma=0.3)
-        f_bar = pm.Deterministic('f_bar', pt.sigmoid(f_bar_logit))
-        f_u   = pm.Deterministic('f_u',   pt.sigmoid(f_bar_logit - delta_f / 2))
-        f_d   = pm.Deterministic('f_d',   pt.sigmoid(f_bar_logit + delta_f / 2))
+        # ── Isospin-symmetric mixing fraction f (f_u = f_d = f) ──────────────
+        # Isospin asymmetry (f_d > f_u from the Au neutron excess) is ignored
+        # for now; both u and d share a single transported fraction f.
+        # Prior: logit(f) ~ N(logit(tanh(μ_B/3T_ch)), f_sigma).
+        f_logit = pm.Normal('f_logit', mu=f_logit_mu, sigma=f_sigma)
+        f       = pm.Deterministic('f', pt.sigmoid(f_logit))
 
         # ── v2^s: strange (fully independent) ────────────────────────────────
         a_s  = pm.HalfNormal('a_s',  sigma=0.15)
@@ -502,10 +505,8 @@ def build_model(data, cfg, lambda_data=None):
 
         # ── Mixture: v2^u and v2^d ────────────────────────────────────────────
         def qv2(p_arr, flavor):
-            if flavor == 'u':
-                return f_u * v2_tr(p_arr) + (1.0 - f_u) * v2_prod(p_arr)
-            elif flavor == 'd':
-                return f_d * v2_tr(p_arr) + (1.0 - f_d) * v2_prod(p_arr)
+            if flavor in ('u', 'd'):
+                return f * v2_tr(p_arr) + (1.0 - f) * v2_prod(p_arr)
             elif flavor == 'a':
                 return v2_prod(p_arr)
             elif flavor == 's':
@@ -513,12 +514,9 @@ def build_model(data, cfg, lambda_data=None):
 
         def qv2_prime(p_arr, flavor):
             """Derivative of quark v2 w.r.t. quark pT."""
-            if flavor == 'u':
-                return f_u * richards_prime(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr) + \
-                       (1.0 - f_u) * richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
-            elif flavor == 'd':
-                return f_d * richards_prime(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr) + \
-                       (1.0 - f_d) * richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
+            if flavor in ('u', 'd'):
+                return f * richards_prime(p_arr, a_tr, b_tr, c_tr, d_tr, nu_tr) + \
+                       (1.0 - f) * richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
             elif flavor == 'a':
                 return richards_prime(p_arr, a_a, b_a, c_a, d_a, nu_a)
             elif flavor == 's':
@@ -597,8 +595,7 @@ def eval_quark_v2_posterior(trace, flavor, p_grid):
                             _flat(post,'a_s'), _flat(post,'b_s'),
                             _flat(post,'c_s'), _flat(post,'d_s'), _flat(post,'nu_s'))
     elif flavor in ('u', 'd'):
-        f_key = 'f_u' if flavor == 'u' else 'f_d'
-        fq   = _flat(post, f_key)[:,None]
+        fq   = _flat(post, 'f')[:,None]
         prod = eval_quark_v2_posterior(trace, 'a', p_grid)
         tr   = eval_quark_v2_posterior(trace, 'tr', p_grid)
         return fq * tr + (1.0 - fq) * prod
@@ -625,13 +622,11 @@ def eval_pion_decay_posterior(trace, rho, p_query):
                              _flat(post,'a_tr'), _flat(post,'b_tr'),
                              _flat(post,'c_tr'), _flat(post,'d_tr'), _flat(post,'nu_tr'))
 
-    fu = _flat(post, 'f_u')[:,None]
-    fd = _flat(post, 'f_d')[:,None]
+    fq = _flat(post, 'f')[:,None]
 
-    v2_u_m  = fu * v2_tr_m + (1 - fu) * v2_prod_m
-    v2_d_m  = fd * v2_tr_m + (1 - fd) * v2_prod_m
+    v2_ud_m = fq * v2_tr_m + (1 - fq) * v2_prod_m           # v2_u = v2_d (isospin-symmetric)
     # v2_rho = v2_a(pt/2) + 0.5*(v2_u(pt/2) + v2_d(pt/2))  [ρ0 NCQ]
-    v2_rho_m = v2_prod_m + 0.5 * (v2_u_m + v2_d_m)          # (S, n)
+    v2_rho_m = v2_prod_m + v2_ud_m                          # (S, n)
 
     # Transfer: v2_decay_grid[s,d] = sum_m A[d,m]*v2_rho[s,m] / norm_grid[d]
     safe_norm     = np.where(norm_grid > 0, norm_grid, 1e-10)
@@ -699,7 +694,7 @@ def energy_label(energy):
     return energy.replace('p', '.').replace('GeV', ' GeV')
 
 
-def plot_quark_v2_functions(trace, out_dir, energy):
+def plot_quark_v2_functions(trace, out_dir, energy, ext='pdf'):
     p_grid = np.linspace(0.08, 1.00, 400)
     flavor_info = [
         ('u',  r'$v_2^u$',              'steelblue'),
@@ -717,26 +712,24 @@ def plot_quark_v2_functions(trace, out_dir, energy):
         ax.set_title(lbl, fontsize=12)
         ax.set_xlim(0.08, 1.00)
     axes[0].set_ylabel(r'$v_2^{\rm quark}$', fontsize=12)
-    fig.suptitle(f'Quark $v_2$ — Au+Au $\\sqrt{{s_{{NN}}}}$={energy_label(energy)}, 10–40%',
-                 fontsize=13)
     fig.tight_layout()
-    fig.savefig(out_dir / 'quark_v2_functions.pdf')
+    fig.savefig(out_dir / f'quark_v2_functions.{ext}')
     plt.close(fig)
-    print('  Saved quark_v2_functions.pdf')
+    print(f'  Saved quark_v2_functions.{ext}')
 
 
-def plot_transported_signal(trace, out_dir, energy, cfg):
+def plot_transported_signal(trace, out_dir, energy, cfg, ext='pdf'):
     """
-    1×3: v2^tr vs v2^prod | isospin signal (f_d-f_u)*(v2^tr-v2^prod) | f_u, f_d posteriors.
+    3×1 (vertical): v2^tr vs v2^prod / transported excess v2^tr-v2^prod / f posterior.
     """
+    LBL, TIT, LEG, SUP, TICK = 20, 20, 17, 24, 16
     p_grid = np.linspace(0.08, 1.00, 400)
     post   = trace.posterior
-    fu_samples  = _flat(post, 'f_u')
-    fd_samples  = _flat(post, 'f_d')
+    f_samples   = _flat(post, 'f')
     prod_curves = eval_quark_v2_posterior(trace, 'a', p_grid)
     tr_curves   = eval_quark_v2_posterior(trace, 'tr', p_grid)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+    fig, axes = plt.subplots(3, 1, figsize=(7, 14))
 
     # Panel 0: v2^tr vs v2^prod
     ax0 = axes[0]
@@ -745,52 +738,49 @@ def plot_transported_signal(trace, out_dir, energy, cfg):
     ax0.plot([], [], color='forestgreen', lw=2, label=r'$v_2^{\rm prod}$')
     ax0.plot([], [], color='crimson',     lw=2, label=r'$v_2^{\rm tr}$')
     ax0.axhline(0, color='k', lw=0.5, ls='--', alpha=0.5)
-    ax0.set_xlabel(r'$p_T/n_q$ (GeV/$c$)', fontsize=11)
-    ax0.set_ylabel(r'$v_2^{\rm quark}$', fontsize=11)
-    ax0.set_title(r'$v_2^{\rm tr}$ vs $v_2^{\rm prod}$', fontsize=11)
-    ax0.legend(fontsize=10)
+    ax0.set_xlabel(r'$p_T/n_q$ (GeV/$c$)', fontsize=LBL)
+    ax0.set_ylabel(r'$v_2^{\rm quark}$', fontsize=LBL)
+    ax0.set_title(r'$v_2^{\rm tr}$ vs $v_2^{\rm prod}$', fontsize=TIT)
+    ax0.legend(fontsize=LEG)
     ax0.set_xlim(0.08, 1.00)
+    ax0.tick_params(axis='both', labelsize=TICK)
 
     # Panel 1: transported excess v2^tr - v2^prod
     ax1 = axes[1]
     diff_curves = tr_curves - prod_curves
     pct_band(diff_curves, ax1, p_grid, 'darkred', alpha_fill=0.3)
     ax1.axhline(0, color='k', lw=0.5, ls='--', alpha=0.5)
-    ax1.set_xlabel(r'$p_T/n_q$ (GeV/$c$)', fontsize=11)
-    ax1.set_ylabel(r'$v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=11)
-    ax1.set_title(r'Transported excess: $v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=11)
+    ax1.set_xlabel(r'$p_T/n_q$ (GeV/$c$)', fontsize=LBL)
+    ax1.set_ylabel(r'$v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=LBL)
+    ax1.set_title(r'Transported excess: $v_2^{\rm tr} - v_2^{\rm prod}$', fontsize=TIT)
     ax1.set_xlim(0.08, 1.00)
+    ax1.tick_params(axis='both', labelsize=TICK)
 
-    # Panel 2: f_u and f_d posteriors overlaid, with prior mean marked
+    # Panel 2: f posterior, with prior mean marked
     ax2 = axes[2]
-    ax2.hist(fu_samples, bins=50, density=True, color='steelblue',  alpha=0.5,
-             label=r'Posterior $f_u$')
-    ax2.hist(fd_samples, bins=50, density=True, color='darkorange', alpha=0.5,
-             label=r'Posterior $f_d$')
+    ax2.hist(f_samples, bins=50, density=True, color='steelblue', alpha=0.6,
+             label=r'Posterior $f$')
     ax2.axvline(cfg['f_prior'], color='k', ls='--', lw=1.5,
                 label=f'Prior mean $= {cfg["f_prior"]:.2f}$')
-    ax2.set_xlabel(r'$f$', fontsize=12)
-    ax2.set_ylabel('Density', fontsize=11)
-    ax2.set_title(r'Posteriors of $f_u$, $f_d$', fontsize=11)
+    ax2.set_xlabel(r'$f$', fontsize=LBL)
+    ax2.set_ylabel('Density', fontsize=LBL)
+    ax2.set_title(r'Posterior of $f$', fontsize=TIT)
     ax2.set_xlim(0, 1)
-    ax2.legend(fontsize=10)
+    ax2.legend(fontsize=LEG)
+    ax2.tick_params(axis='both', labelsize=TICK)
 
-    fig.suptitle(
-        f'Transported quark signal — Au+Au $\\sqrt{{s_{{NN}}}}$={energy_label(energy)}, 10–40%',
-        fontsize=13)
     fig.tight_layout()
-    fig.savefig(out_dir / 'transported_signal.pdf')
+    fig.savefig(out_dir / f'transported_signal.{ext}', bbox_inches='tight')
     plt.close(fig)
-    print('  Saved transported_signal.pdf')
+    print(f'  Saved transported_signal.{ext}')
 
 
-def plot_posterior_predictive(trace, data, out_dir, energy, lambda_data=None):
-    n_plot = len(PARTICLES)
-    ncols = 4
-    nrows = 2
+def plot_posterior_predictive(trace, data, out_dir, energy, lambda_data=None, ext='pdf'):
+    LBL, ANN, LEG, SUP, TICK = 26, 20, 18, 26, 16
     p_fine = np.linspace(0.05, 3.2, 800)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(18, 9))
-    axes = axes.flatten()
+    fig = plt.figure(figsize=(18, 9))
+    gs  = fig.add_gridspec(ncols=4, nrows=2, hspace=0.0, wspace=0.0)
+    axes = gs.subplots(sharex='col', sharey='row').flatten()
     for idx, sp in enumerate(PARTICLES):
         ax = axes[idx]
         if sp in data:
@@ -803,37 +793,40 @@ def plot_posterior_predictive(trace, data, out_dir, energy, lambda_data=None):
         curves = hadron_pred_posterior(trace, sp, p_fine)
         pct_band(curves, ax, p_fine, col)
         ax.errorbar(pT_d, v2_d, yerr=err_d, fmt='o', color='k',
-                    ms=4, capsize=2, lw=1, label='Data', zorder=10)
+                    ms=6, capsize=3, lw=1.5, label='Data', zorder=10)
         pred_at_data = hadron_pred_posterior(trace, sp, pT_d)
         pred_med     = np.median(pred_at_data, axis=0)
         valid        = np.isfinite(v2_d) & np.isfinite(err_d) & np.isfinite(pred_med) & (err_d > 0)
         if valid.sum() > 0:
-            chi2 = np.sum(((v2_d[valid] - pred_med[valid]) / err_d[valid]) ** 2)
-            dof  = valid.sum()
-            ax.text(0.97, 0.05, fr'$\chi^2/N={chi2/dof:.1f}$ ({dof})',
-                    transform=ax.transAxes, ha='right', va='bottom', fontsize=9,
-                    color='dimgray')
+            # Per-panel chi^2 over N data points (NOT a reduced chi^2: the ~21 model
+            # parameters are global/shared across all species, so per-species N-p is not the
+            # right ndf). Labeled chi^2/N to make that explicit; do not read as a GOF. (M15)
+            chi2  = np.sum(((v2_d[valid] - pred_med[valid]) / err_d[valid]) ** 2)
+            n_pts = valid.sum()
+            ax.annotate(fr'$\chi^2/N={chi2/n_pts:.1f}$ ({n_pts})', xy=(0.95, 0.06),
+                        xycoords='axes fraction', ha='right', va='bottom',
+                        fontsize=ANN, color='dimgray')
+        ax.annotate(LABELS[sp], xy=(0.06, 0.92), xycoords='axes fraction',
+                    ha='left', va='top', fontsize=SUP)
+        ax.set_xlim(0, 3.2)
+        ax.tick_params(axis='both', labelsize=TICK)
+    axes[0].set_ylim(-0.01, 0.165)   # meson row (shared)
+    axes[4].set_ylim(-0.01, 0.235)   # baryon/Lambda row (shared)
+    axes[0].legend(fontsize=LEG, frameon=False, loc='center right')
 
-        ax.set_xlabel(r'$p_T$ (GeV/$c$)', fontsize=11)
-        ax.set_ylabel(r'$v_2$', fontsize=11)
-        ax.set_title(LABELS[sp], fontsize=13)
-        xlim = 2.2 if sp in MESON_SPECIES else 3.2
-        ax.set_xlim(0, xlim)
-        ax.set_ylim(bottom=-0.01)
-        ax.legend(fontsize=9)
-    # Hide unused axes if any
-    for idx in range(len(PARTICLES), len(axes)):
-        axes[idx].set_visible(False)
-    fig.suptitle(
-        f'Posterior predictive check — Au+Au $\\sqrt{{s_{{NN}}}}$={energy_label(energy)}, 10–40%',
-        fontsize=13)
-    fig.tight_layout()
-    fig.savefig(out_dir / 'posterior_predictive.pdf')
+    # Shared x/y labels via an invisible full-figure overlay (matches ratio.pdf)
+    fig.add_subplot(111, frameon=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.grid(False)
+    plt.xlabel(r'$p_T$ (GeV/$c$)', fontsize=LBL, labelpad=20)
+    plt.ylabel(r'$v_2$', fontsize=LBL, labelpad=25)
+
+    fig.savefig(out_dir / f'posterior_predictive.{ext}', bbox_inches='tight')
     plt.close(fig)
-    print('  Saved posterior_predictive.pdf')
+    print(f'  Saved posterior_predictive.{ext}')
 
 
-def plot_quark_comparison(trace, out_dir, energy):
+def plot_quark_comparison(trace, out_dir, energy, ext='pdf'):
     p_grid = np.linspace(0.08, 1.00, 400)
     flavor_info = [
         ('u',  r'$v_2^u$',          'steelblue'),
@@ -855,11 +848,10 @@ def plot_quark_comparison(trace, out_dir, energy):
     ax.set_ylabel(r'$v_2^{\rm quark}$', fontsize=13)
     ax.set_xlim(0.08, 1.00)
     ax.legend(fontsize=12)
-    ax.set_title(f'Au+Au $\\sqrt{{s_{{NN}}}}$={energy_label(energy)}, 10–40%', fontsize=12)
     fig.tight_layout()
-    fig.savefig(out_dir / 'quark_v2_comparison.pdf')
+    fig.savefig(out_dir / f'quark_v2_comparison.{ext}')
     plt.close(fig)
-    print('  Saved quark_v2_comparison.pdf')
+    print(f'  Saved quark_v2_comparison.{ext}')
 
 # ── Main ────────────────────────────────────────────────────────────────────────
 
@@ -931,7 +923,7 @@ def main():
         ['a_tr', 'b_tr', 'c_tr', 'd_tr', 'nu_tr'] +
         ['a_a',  'b_a',  'c_a',  'd_a',  'nu_a']  +
         ['a_s',  'b_s',  'c_s',  'd_s',  'nu_s']  +
-        ['f_bar', 'delta_f', 'eps0_pi'] +
+        ['f', 'eps0_pi'] +
         ['A_fast', 'tau_fast', 'B_slow', 'tau_slow']
     )
     hier_names = []

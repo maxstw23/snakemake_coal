@@ -44,6 +44,37 @@ def autoscale_helper(arr, arr_err):
     plt.close(fig_temp)
     return lb, rb
 
+
+def ratio_toymc(num, den, n_toy=100000, seed=0):
+    """Toy-MC confidence interval for the ratio R = num/den, per bin.
+
+    The linear `uncertainties` error on a ratio is invalid when the denominator is
+    consistent with zero (ratio of Gaussians is Cauchy-like; see docs/ratio_statistics.md).
+    `num` and `den` are arrays of (correlated) ufloats; their exact 2x2 covariance — which
+    carries the shared-antiproton and resolution correlations (resolution cancels in R) — is
+    taken from the uncertainties package, sampled, and R formed per toy.
+
+    Returns (median, err_lo, err_hi, signflip_frac) arrays. signflip_frac = fraction of toys
+    where the denominator changes sign (≈0 when well-determined; →0.5 when D~0, where the
+    median is unreliable and the bin should be flagged "unconstrained").
+    """
+    from uncertainties import covariance_matrix
+    rng = np.random.default_rng(seed)
+    n = len(num)
+    med = np.full(n, np.nan); elo = np.full(n, np.nan); ehi = np.full(n, np.nan); sf = np.full(n, np.nan)
+    for i in range(n):
+        Ni, Di = num[i], den[i]
+        if not (np.isfinite(Di.n) and np.isfinite(Ni.n)) or Di.s <= 0:
+            continue
+        cov = np.array(covariance_matrix([Ni, Di]))
+        s = rng.multivariate_normal([Ni.n, Di.n], cov, n_toy)
+        R = s[:, 0] / s[:, 1]
+        med[i] = np.median(R)
+        elo[i] = med[i] - np.percentile(R, 16)
+        ehi[i] = np.percentile(R, 84) - med[i]
+        sf[i]  = np.mean(np.sign(s[:, 1]) != np.sign(Di.n))
+    return med, elo, ehi, sf
+
 def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, energy, yrange):
     df = pd.read_csv(inputFile)
     df_cen = [pd.read_csv(inputFile.replace('.csv', f'_cen{i+1}.csv')) for i in range(9)]
@@ -89,7 +120,7 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
     # }
     # mask all EPD bins for 7.7, 9.2 and 11.5 GeV
     masked_bins = {
-        '7.7GeV': {'EPD': [1, 2, 3, 4, 5, 6]},
+        '7.7GeV': {'EPD': [1, 2, 3, 4, 5, 6], 'TPC': [1]},
         '9.2GeV': {'EPD': [1, 2, 3, 4, 5, 6, 7]},
         '11.5GeV': {'EPD': [1, 2, 3, 4, 5, 6, 7, 8]},
         '17.3GeV': {'EPD': [1]},
@@ -151,8 +182,10 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
                 proton_v2 = dict_v2['p']
                 antiproton_v2 = dict_v2['ap']
 
-        ### Fill masked bins where resolution is invalid (+-nan or inf, or negative)
-        index_masked = np.isnan(unumpy.nominal_values(resolution)) | np.isinf(unumpy.nominal_values(resolution)) | (unumpy.nominal_values(resolution) < 0)
+        ### Fill masked bins where resolution is invalid
+        res_nom = unumpy.nominal_values(resolution)
+        res_std = unumpy.std_devs(resolution)
+        index_masked = np.isnan(res_nom) | np.isinf(res_nom) | (res_nom - 2. * res_std <= 0.)
         print(f'Energy: {energy}, EP: {EP}')
         print(f'    masked bins: {np.where(index_masked)[0]}')
         print(f'    merged bins: {merged_bins.get(energy, {}).get(EP, [])}')
@@ -228,16 +261,23 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         # ratio = pim_subtracted_unc / pip_subtracted_unc
         ratio = pim_subtracted / pip_subtracted
         # ratio = (piminus_v2 - piplus_v2) / (piplus_v2 - antiproton_v2 * 2. / 3.) + 1
+        # C1: toy-MC interval (linear ratio error is invalid where the denominator ~0;
+        # docs/ratio_statistics.md). Asymmetric; flags bins with signflip>0.16 as unconstrained.
+        r_med, r_lo, r_hi, r_sf = ratio_toymc(pim_subtracted, pip_subtracted)
+        r_unconstrained = r_sf > 0.16  # D/sigma_D < ~1
+        if r_unconstrained.any():
+            print(f'    [C1] {EP} bins with D~0 (toy unreliable, signflip>0.16): '
+                  f'cen%={cen[r_unconstrained]}, signflip={np.round(r_sf[r_unconstrained],2)}')
         ratio_merged = {}
         for cb in cen_bins_correspondence.keys():
             ratio_merged[cb] = ufloat(-999, 999)
             if EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
                 ratio_merged[cb] = (piminus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.) / (piplus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.)
 
-        ax_coal[2].errorbar(cen, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), fmt='o', ls='none',
+        ax_coal[2].errorbar(cen, r_med, yerr=[r_lo, r_hi], fmt='o', ls='none',
                             label=r'$\frac{v_2^{\pi^-}-2v_2^{\bar{u}}}{v_2^{\pi^+}-2v_2^{\bar{u}}}$')
         shift = 1. if EP == 'TPC' else -1
-        ax_c.errorbar(cen+shift, unumpy.nominal_values(ratio), unumpy.std_devs(ratio), fmt='o', ls='none', label=EP)
+        ax_c.errorbar(cen+shift, r_med, yerr=[r_lo, r_hi], fmt='o', ls='none', label=EP)
         ax_coal[2].set_xlabel('Centrality (%)', fontsize=16)
         ax_coal[2].set_ylabel('Ratio', fontsize=16)
         ax_coal[2].tick_params(axis='x', labelsize=16)
@@ -262,8 +302,10 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         plt.tight_layout()
         fig_coal.savefig(f'{outputDir}/coal_{EP}.pdf')
         with open(f'{outputDir}/coal_{EP}.yaml', 'w') as f:
-            yaml.dump({'x': cen, 
+            yaml.dump({'x': cen,
                        'y': unumpy.nominal_values(ratio), 'yerr': unumpy.std_devs(ratio),
+                       'y_toymc': r_med.tolist(), 'yerr_toymc_lo': r_lo.tolist(),
+                       'yerr_toymc_hi': r_hi.tolist(), 'signflip_frac': r_sf.tolist(),
                        'y_010': unumpy.nominal_values(ratio_merged['0-10%']), 'yerr_010': unumpy.std_devs(ratio_merged['0-10%']),
                        'y_1040': unumpy.nominal_values(ratio_merged['10-40%']), 'yerr_1040': unumpy.std_devs(ratio_merged['10-40%']),
                        'y_4080': unumpy.nominal_values(ratio_merged['40-80%']), 'yerr_4080': unumpy.std_devs(ratio_merged['40-80%']),
