@@ -11,8 +11,12 @@ than $\pi^+(u\bar{d})$. Using the antiproton as a produced-quark baseline:
 $$R \equiv \frac{v_2(\pi^-) - \tfrac{2}{3}v_2(\bar{p})}{v_2(\pi^+) - \tfrac{2}{3}v_2(\bar{p})} = \frac{N_d^{tr}}{N_u^{tr}} \approx 1.14$$
 
 This repository contains **only the downstream stage**: it starts from the per-energy `result*.root`
-histogram files produced by the upstream STAR analysis maker and ends at
+histogram files produced by the upstream STAR analysis maker (`kfparticle_unified`) and ends at
 `plots/final/report.pdf`. It does not read STAR picoDSTs.
+
+**The input data ships with this repository.** `data/` holds trimmed `result*.root` files containing
+exactly the histograms the pipeline reads, so a fresh clone reproduces every result with no external
+data. You only need to go back to the upstream maker if you change what the pipeline reads — see §2.
 
 ---
 
@@ -22,7 +26,7 @@ histogram files produced by the upstream STAR analysis maker and ends at
 |---|---|---|
 | Conda / mamba (miniforge) | Python environment | `environment.yaml` builds env **`lambda_v1`** |
 | Docker | CERN ROOT | The flow-extraction rules run `rootproject/root:latest` in a container — no local ROOT install needed |
-| ~20 GB disk | Intermediate + output files | Input ROOT files are ~40 MB × (7 energies × 4 productions) |
+| ~20 GB disk | Intermediate + output files | `data/` adds 356 MB; the rest is `result/`, `plots/` and `temp/` |
 | Local ROOT 6 (**optional**) | `compile_efficiency`, `compile_user_class`, `*_special_sys` rules call a bare `root` | See §5.1 for the Docker-only workaround |
 | [ResFlow](https://github.com/) checkout (**optional**) | resonance-decay inversion | Only for `rho_coal_ratio` and the ρ feed-down correction inside `quark_v2_bayes`; expected at `~/Research/ResFlow` |
 
@@ -40,20 +44,53 @@ docker pull rootproject/root:latest
 
 ---
 
-## 2. Input data you must supply
+## 2. Input data
 
-Everything under `data/` is git-ignored — you provide it. Place the upstream files exactly as below.
-The Snakefile discovers them by glob, and for each `(production, energy)` pair it picks the file with
+### 2.0 What is in the repository, and when you need more
+
+`data/` is **tracked and already populated** with 31 trimmed `result*.root` files (356 MB total,
+largest 13.9 MB). Clone and run — nothing to download, nothing to request.
+
+The trimmed files are not a lossy summary of the measurement: they are a *subset of objects*, copied
+bit-for-bit. `scripts/slim_result_files.py` keeps every histogram any rule opens and drops the rest
+(PID QA maps, Ω/Ξ/φ correlation histograms, recentering maps — ~97% of each raw file by volume, none
+of it read here), then rewrites with LZMA. The kept objects are byte-identical: same bin contents,
+errors, `fBinEntries`, `fSumw2`, `fEntries` and class names. Running the full pipeline on trimmed vs.
+raw inputs produces **1100 of 1120 result CSVs byte-identical, with zero differences outside the
+Λ fits** (which are non-deterministic by construction — `--max_refit 500` random restarts).
+
+**You need to regenerate raw files only if you change what is read.** Adding a new histogram, a new
+species, a new binning, or a new systematic tag means the object simply is not in the trimmed files.
+In that case:
+
+1. Re-run the upstream maker **`kfparticle_unified`** to produce a fresh, untrimmed
+   `result<N>_<energy>.root`.
+2. Drop it into `data/` under the layout below. The pipeline reads raw and trimmed files identically —
+   the trim changes nothing about how the files are opened, so an untrimmed file is a drop-in.
+3. Optionally re-trim before committing:
+   ```bash
+   python3 scripts/slim_result_files.py --out data_slim        # writes a mirrored, trimmed tree
+   python3 scripts/slim_result_files.py --out data_slim --check # verify against the source
+   ```
+   Update the keep-list at the top of that script first if your new histograms are not matched by it,
+   or they will be dropped.
+
+Raw untrimmed productions are **not** in git (1.34 GB). Keep them outside the repo; `backup/` is
+git-ignored and is the conventional spot.
+
+### 2.1 Layout
+
+The Snakefile discovers files by glob, and for each `(production, energy)` pair it picks the file with
 the **highest leading integer** in the filename (`result103_27GeV.root` beats `result9_27GeV.root`).
 
 ```
 data/
-├── result<N>_<energy>.root                       # REQUIRED: default production
-├── sys_tag_1/result<N>_sys_tag_1_<energy>.root   # optional: |Vz| < 35 cm
-├── sys_tag_2/result<N>_sys_tag_2_<energy>.root   # optional: nHitsFit >= 20
-├── sys_tag_4/result<N>_sys_tag_4_<energy>.root   # optional: PID nSigma 2 -> 3
-├── part_tag_1/result<N>_part_tag_1_<energy>.root # optional: swapped-plane production
-└── embedding/<energy>/cen{1..9}.<particle>.root  # REQUIRED (see §2.3)
+├── result<N>_<energy>.root                       # REQUIRED: default production      [in repo]
+├── sys_tag_1/result<N>_sys_tag_1_<energy>.root   # optional: |Vz| < 35 cm            [in repo]
+├── sys_tag_2/result<N>_sys_tag_2_<energy>.root   # optional: nHitsFit >= 20          [in repo]
+├── sys_tag_4/result<N>_sys_tag_4_<energy>.root   # optional: PID nSigma 2 -> 3       [in repo]
+├── part_tag_1/result<N>_part_tag_1_<energy>.root # optional: swapped-plane           [in repo, 14p6GeV only]
+└── embedding/<energy>/cen{1..9}.<particle>.root  # git-ignored, normally NOT needed (see §2.4)
 ```
 
 `<energy>` ∈ `7p7GeV 9p2GeV 11p5GeV 14p6GeV 17p3GeV 19p6GeV 27GeV` (whatever you list in
@@ -64,7 +101,7 @@ fine, the systematic band is simply built from the tags that exist for that ener
 (`sys_tags_for()` in the Snakefile). With no `sys_tag_*` directories at all the pipeline still runs
 and the reported systematic uncertainty is zero.
 
-### 2.1 Histogram contract — `result*.root`
+### 2.2 Histogram contract — `result*.root`
 
 | Object | Name | Type |
 |---|---|---|
@@ -87,7 +124,7 @@ $|y| <$ `eta_cut` before the flow extraction, otherwise the 1D profiles are used
 If the `_1st`/`_2nd` suffixed profiles are absent, the code falls back to the unsuffixed
 `h{particle}_{EP}_v2_pt_{cen}`, and the alternative-plane analyses (§7) will not be meaningful.
 
-### 2.2 Which upstream production carries which event plane
+### 2.3 Which upstream production carries which event plane
 
 The Snakefile builds four event-plane "legs" from two productions:
 
@@ -103,18 +140,22 @@ production the two are **swapped**. If you have no `data/part_tag_1/`, the two c
 `plane_matrix` target simply drop out of the DAG. See
 [docs/spectator_plane_ratio.md](docs/spectator_plane_ratio.md).
 
-### 2.3 Embedding files
+### 2.4 Embedding files
 
 Needed by `TPC_eff` to fit the TPC tracking efficiency. Each file must contain `hPt`, `hPtMc`,
 `hEta`, `hSelPtEta`, `hSelPtEtaMc`, `hnSigmaPt`.
 
-`config.yaml` ships with `correct_eff: 1`, and `generate_paper_plots` always consumes the
-efficiency-corrected CSVs for its comparison panel — so **embedding data is required for the default
-targets**, per energy, for all six species and all 9 centrality bins.
+**Normally you do not need these.** `scripts/{energy}/Efficiency.cpp` — the generated efficiency
+lookup table — is committed for **all seven energies**, so `TPC_eff` never fires and the 134 MB
+embedding tree is not required to build any default target.
 
-Shortcut: `scripts/{energy}/Efficiency.cpp` (the generated efficiency lookup table) is checked into
-git for the energies that have been run. If the file for your energy is present, Snakemake will not
-re-run `TPC_eff` and the embedding files for that energy are not needed. Delete it to force a refit.
+You need embedding data only to *refit* the efficiency: delete `scripts/{energy}/Efficiency.cpp` to
+force a refit, or add an energy that has no committed table. Then you need the full
+`data/embedding/{energy}/` set — all six species × 9 centrality bins (54 files).
+
+(`config.yaml` ships with `correct_eff: 1` and `generate_paper_plots` always consumes the
+efficiency-corrected CSVs, so the efficiency path itself is always active — it is just satisfied by
+the committed tables rather than by a refit.)
 
 ---
 
@@ -233,11 +274,12 @@ Container-written files (the CSVs under `result/`) are owned by the container us
 add `--user "$(id -u):$(id -g)"` to the `docker run` lines in the `Snakefile` if that causes
 permission problems on later runs.
 
-### 5.5 Energies without a checked-in efficiency table
+### 5.5 Adding an energy
 
-`scripts/{energy}/Efficiency.cpp` is committed for some energies only. For any other energy the
-`TPC_eff` rule runs and needs the full `data/embedding/{energy}/` set (54 files). Consider committing
-the generated `Efficiency.cpp`/`.h` so collaborators can skip that step.
+`scripts/{energy}/Efficiency.cpp` is committed for all seven energies currently in `config.yaml`. Add
+a new energy and `TPC_eff` will run for it, requiring the full `data/embedding/{energy}/` set (54
+files). Commit the generated `Efficiency.cpp`/`.h` afterwards so nobody else needs the embedding
+sample.
 
 ---
 
@@ -305,8 +347,10 @@ scripts/
   generate_paper_plots.py                           final report
   quark_v2_bayes.py, rho_coal_ratio.py              Bayesian NCQ fit, rho feed-down
   plane_matrix.py, attribute_plane.py               event-plane decomposition
+  slim_result_files.py                              trim result*.root to the pipeline's keep-list
   {energy}/                                         generated + compiled efficiency code
-data/    inputs (git-ignored, you supply)
+data/    trimmed result*.root inputs (TRACKED); data/embedding/ git-ignored
+backup/  git-ignored; raw untrimmed productions live here
 result/  CSV outputs (git-ignored)
 plots/   PDF/YAML outputs (git-ignored)
 logs/    per-rule stdout/stderr
