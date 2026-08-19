@@ -11,6 +11,8 @@ import argparse
 import time
 
 import numpy as np
+# np.trapz was removed in NumPy 2.0 and renamed to np.trapezoid.
+_trapezoid = getattr(np, 'trapezoid', None) or np.trapz
 import pandas as pd
 import uproot
 import yaml
@@ -144,7 +146,7 @@ def percentage_sigma(scale_1, scale_2, sigma_1, sigma_2, opt=3):
         else:
             ind_left -= 1
             ind_right += 1
-        area_signal = np.trapz(y[ind_left:ind_right], dx=0.2 / num_div)
+        area_signal = _trapezoid(y[ind_left:ind_right], dx=0.2 / num_div)
         cur_perc = area_signal / area_all
     return (x[ind_right] - x[ind_left]) / opt / 2
 
