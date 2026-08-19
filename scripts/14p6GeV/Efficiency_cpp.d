@@ -2,5 +2,5 @@
 # DO NOT DELETE
 
 ./Efficiency_cpp.so: Efficiency.h
-./Efficiency_cpp.so: /mnt/d/Root/builddir/include/RVersion.h /mnt/d/Root/builddir/include/RConfig.h /mnt/d/Root/builddir/include/TClass.h /mnt/d/Root/builddir/include/TDictAttributeMap.h /mnt/d/Root/builddir/include/TInterpreter.h /mnt/d/Root/builddir/include/TROOT.h /mnt/d/Root/builddir/include/TBuffer.h /mnt/d/Root/builddir/include/TMemberInspector.h /mnt/d/Root/builddir/include/TError.h /mnt/d/Root/builddir/include/RtypesImp.h /mnt/d/Root/builddir/include/TIsAProxy.h /mnt/d/Root/builddir/include/TFileMergeInfo.h /mnt/d/Root/builddir/include/TCollectionProxyInfo.h /mnt/d/Root/builddir/bin/rootcling
-Efficiency_cpp__ROOTBUILDVERSION= 6.14/02
+./Efficiency_cpp.so: /opt/root/include/RVersion.h /opt/root/include/ROOT/RConfig.hxx /opt/root/include/TClass.h /opt/root/include/TDictAttributeMap.h /opt/root/include/TInterpreter.h /opt/root/include/TROOT.h /opt/root/include/TBuffer.h /opt/root/include/TMemberInspector.h /opt/root/include/TError.h /opt/root/include/RtypesImp.h /opt/root/include/TIsAProxy.h /opt/root/include/TFileMergeInfo.h /opt/root/include/TCollectionProxyInfo.h /opt/root/bin/rootcling
+Efficiency_cpp__ROOTBUILDVERSION= 6.38.00

@@ -8,6 +8,7 @@ For detailed documentation, see:
 - [docs/scripts.md](docs/scripts.md) - Script reference with detailed behavior for each file
 - [docs/data_io.md](docs/data_io.md) - Data formats, directory layout, input/output specifications
 - [docs/theory.md](docs/theory.md) - Extended coalescence derivations: resonance fraction correction, B/A ratio, isobar predictions (-1 and 1/2)
+- [docs/spectator_plane_ratio.md](docs/spectator_plane_ratio.md) - Why the ratio shifts on the 1st-order spectator vs 2nd-order participant plane: exact $\varepsilon$/$\rho$ decomposition, sign analysis, attribution test
 
 Refer to `config.yaml` for analysis parameters (energies, cuts, pT ranges).
 Refer to `/mnt/d/Research/thesis/analysis/flow.tex` for the full theoretical write-up.

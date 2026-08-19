@@ -124,6 +124,41 @@ def build_sys_covariance(energy_float, source_contrib, splits=SYS_REGIME_SPLITS)
     return V
 
 
+# Slide (presentation) rendering: same figures as the paper versions, only with
+# every text element scaled up and heavier/longer ticks so they stay readable when
+# projected. Written next to the paper files with a '_slide' suffix.
+SLIDE_FONT_SCALE = 1.5
+SLIDE_TICK_LABELSIZE = 18
+
+
+def slide_style(slide):
+    """Return (font-size scaler, per-axes tick styler) for the given mode."""
+    if not slide:
+        return (lambda s: s), (lambda ax: None)
+
+    def scale(s):
+        return s * SLIDE_FONT_SCALE
+
+    def tick(ax):
+        ax.tick_params(axis='both', which='major', labelsize=SLIDE_TICK_LABELSIZE,
+                       length=8, width=1.4)
+        ax.tick_params(axis='both', which='minor', length=4, width=1.0)
+
+    return scale, tick
+
+
+def save_figure(path_base, slide, svg_kwargs=None):
+    """Save the current figure: pdf/eps/svg for paper, pdf/png/svg (tight) for slides."""
+    if slide:
+        plt.savefig(path_base + '_slide.pdf', bbox_inches='tight')
+        plt.savefig(path_base + '_slide.png', format='png', dpi=200, bbox_inches='tight')
+        plt.savefig(path_base + '_slide.svg', format='svg', bbox_inches='tight')
+        return
+    plt.savefig(path_base + '.pdf')
+    plt.savefig(path_base + '.eps', format='eps')
+    plt.savefig(path_base + '.svg', format='svg', **(svg_kwargs or {}))
+
+
 def find_files(input_files, key):
     for f in input_files:
         if key in f:
@@ -138,7 +173,7 @@ def show_figure(fig):
     fig.set_canvas(new_manager.canvas)
 
 
-def plot_res(dict_input, figs, paper_plots_path):
+def plot_res(dict_input, figs, paper_plots_path, unmask_epd=False):
     ### resolution
     files = dict_input['res']
     fig_res = plt.figure(figsize=(8 ,12))
@@ -151,7 +186,10 @@ def plot_res(dict_input, figs, paper_plots_path):
     res_files = sorted([f for f in files if not f.split('/')[-2].split('_')[1].startswith('isobar')], key=_energy_key)
 
     # energies that have EPD data in the ratio plot
+    # unmask_epd (e.g. 1st-order spectator plane) -> show EPD for every energy
     epd_energies = {'14.6GeV', '17.3GeV', '19.6GeV', '27GeV'}
+    if unmask_epd:
+        epd_energies = {f.split('/')[-2].split('_')[1].replace('p', '.') for f in res_files}
 
     markers = ['o', 's', 'D', '^', 'v', 'p', '*']
     colors = [f'C{i}' for i in range(len(res_files))]
@@ -200,7 +238,8 @@ def plot_res(dict_input, figs, paper_plots_path):
     plt.close()
     return figs
 
-def plot_pion_v2(dict_input, figs, paper_plot_path):
+def plot_pion_v2(dict_input, figs, paper_plot_path, unmask_epd=False, slide=False):
+    fs, tick = slide_style(slide)
     # remove isobar files
     files = [f for f in dict_input['v2'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
     resfiles = [f for f in dict_input['res'] if not f.split('/')[-2].split('_')[1].startswith('isobar')]
@@ -214,10 +253,14 @@ def plot_pion_v2(dict_input, figs, paper_plot_path):
         df_res = pd.read_csv(fres)
         energy = f.split('/')[-2].split('_')[1].replace('p', '.')
         for EP in ['TPC', 'EPD']:
-            if EP == 'EPD' and float(energy.replace('GeV', '')) < 14.6:
+            if EP == 'EPD' and float(energy.replace('GeV', '')) < 14.6 and not unmask_epd:
                 continue
             resolution = unumpy.uarray(df_res[f'{EP}_res'].values, df_res[f'{EP}_res_err'].values)
             res_mask = unumpy.nominal_values(resolution) >= 0.05
+            # unmask_epd: drop the 0.05 resolution-quality gate for EPD, keep only the
+            # finite-resolution guard so every point is shown for inspection
+            if unmask_epd and EP == 'EPD':
+                res_mask = unumpy.nominal_values(resolution) > 0
             if energy == '7.7GeV' and EP == 'TPC':
                 res_mask[0] = False  # 70-80% bin has poor statistics at 7.7 GeV
             piplus_v2 = unumpy.uarray(df[f'piplus_v2_{EP}'].values, df[f'piplus_v2_err_{EP}'].values) / resolution / 2
@@ -239,15 +282,19 @@ def plot_pion_v2(dict_input, figs, paper_plot_path):
                color='C3', marker='^', mfc=mfc, zorder=z)
             eb(ax_coal[i], x+shift_EP, unumpy.nominal_values(antiproton_v2), unumpy.std_devs(antiproton_v2),
                color='C2', marker='d', mfc=mfc, zorder=z)
-            ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
+            ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.08 if slide else 0.15, 0.9), fontsize=fs(15), xycoords='axes fraction', horizontalalignment='left')
             ax_coal[i].set_xlim(-5, 85)
             ax_coal[i].set_ylim(-0.005, 0.0349)
             lb, rb = ax_coal[i].get_xlim()
+    # includes the empty legend panel, whose shared x ticks must match the rest
+    for ax in ax_coal:
+        tick(ax)
     fig_coal.add_subplot(111, frameon=False)
-    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False,
+                    labelsize=fs(10))
     plt.grid(False)
-    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
-    plt.ylabel(r'$v_2/n_q$', fontsize=15, labelpad=20)
+    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=fs(15))
+    plt.ylabel(r'$v_2/n_q$', fontsize=fs(15), labelpad=fs(20))
     h_auau = ax_coal[7].plot([], [], ' ')[0]
     h_piplus_tpc = ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0')
     h_piplus_epd = ax_coal[7].errorbar([], [], yerr=[], fmt='o', capsize=2, ms=8, color='C0', mfc='white')
@@ -260,19 +307,19 @@ def plot_pion_v2(dict_input, figs, paper_plot_path):
         [h_auau, (h_piplus_tpc, h_piplus_epd), (h_piminus_tpc, h_piminus_epd), (h_pbar_tpc, h_pbar_epd)],
         ['Au+Au', r'$\pi^+$ (TPC/EPD)', r'$\pi^-$ (TPC/EPD)', r'$\bar{p}$ (TPC/EPD)'],
         handler_map={tuple: HandlerTuple(ndivide=None)},
-        fontsize=15, frameon=False, loc='center'
+        fontsize=fs(15), frameon=False, loc='center'
     )
 
     plt.figure(fig_coal.number)
-    plt.savefig(paper_plot_path + '/pion_v2.pdf')
-    plt.savefig(paper_plot_path + '/pion_v2.eps', format='eps')
-    plt.savefig(paper_plot_path + '/pion_v2.svg', format='svg')
-    figs.append(fig_coal)
+    save_figure(paper_plot_path + '/pion_v2', slide)
+    if not slide:
+        figs.append(fig_coal)
     plt.close()
     return figs
 
 
-def plot_ratio(dict_input, figs, paper_plot_path):
+def plot_ratio(dict_input, figs, paper_plot_path, slide=False):
+    fs, tick = slide_style(slide)
     merged_bins = {
         '7.7GeV': {'EPD': [7,8,9]},
          '9.2GeV': {'EPD': [1,2,3]},
@@ -318,7 +365,7 @@ def plot_ratio(dict_input, figs, paper_plot_path):
             for j in range(len(x)):
                 ax_coal[i].fill_between(np.array([x[j]-0.5, x[j]+0.5])+shift,
                                         y_cen[j]-err_sys[j], y_cen[j]+err_sys[j], color=marker_styles[EP]['color'], alpha=0.3)
-            ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.15, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
+            ax_coal[i].annotate(r'$\sqrt{s_{\text{NN}}}=$' + energy, xy=(0.08 if slide else 0.15, 0.9), fontsize=fs(15), xycoords='axes fraction', horizontalalignment='left')
             ax_coal[i].set_xlim(-5, 85)
             lb, rb = ax_coal[i].get_xlim()
             ax_coal[i].set_ylim(0.55, 1.649)
@@ -332,43 +379,71 @@ def plot_ratio(dict_input, figs, paper_plot_path):
         ratio_upper = ratio_du + ratio_du_err
         ratio_lower = ratio_du - ratio_du_err
         ax_coal[i].fill_between(cen_glauber, ratio_lower, ratio_upper, color='C2', alpha=0.8, label='Glauber')
+    # includes the empty legend panel, whose shared x ticks must match the rest
+    for ax in ax_coal:
+        tick(ax)
     fig_coal.add_subplot(111, frameon=False)
-    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    plt.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False,
+                    labelsize=fs(10))
     plt.grid(False)
-    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=15)
-    plt.ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=18)
+    plt.xlabel(r'$\text{Centrality (%)}$', fontsize=fs(15))
+    plt.ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=fs(18))
     # plt.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.12)
-    ax_coal[7].plot([], [], ' ', label='Au+Au')
     ax_coal[7].errorbar([], [], yerr=[], label='TPC Event plane', **marker_styles['TPC'])
     ax_coal[7].errorbar([], [], yerr=[], label='EPD Event plane', **marker_styles['EPD'])
     # ax_coal[7].annotate(r'$\bf{STAR}\;\it{Preliminary}$', xy=(0.15, 0.8), xycoords='axes fraction', fontsize=20)
     ax_coal[7].fill_between([], [], [], color='C2', alpha=0.8, label='Glauber d/u')
     ax_coal[7].hlines(999, lb, rb, color='C3', linestyle='--', label='315/276')
     # ax_coal[7].tick_params(axis='x', which='both', length=0)
-    ax_coal[7].legend(fontsize=15, frameon=False, loc='center')
+    # the legend panel also carries the Au+Au / kinematics text below; on slides the
+    # enlarged entries need to sit lower and a notch smaller to stay clear of it
+    ax_coal[7].legend(fontsize=fs(13) if slide else 15, frameon=False, loc='center',
+                      bbox_to_anchor=(0.5, 0.26 if slide else 0.30))
 
-    # print result to txt
-    with open(paper_plot_path + '/ratio.txt', 'w') as file:
-        for i, f in enumerate(files['TPC']):
-            energy = f.split('/')[-2].split('_')[1].replace('p', '.')
-            file.write(f'AuAu, {energy}\n')
-            for EP in ['TPC', 'EPD']:
-                file.write(f'{EP}\n')
-                with open(files[EP][i], 'r') as f:
-                    data_dict = yaml.load(f, Loader=yaml.CLoader)
-                x = np.array(data_dict['x'])
-                ratio = unumpy.uarray(data_dict['y'], data_dict['yerr'])
-                for j in range(len(x)):
-                    file.write(f'{x[j]:.2f} {unumpy.nominal_values(ratio)[j]:.4f}+-{unumpy.std_devs(ratio)[j]:.4f}\n')
-            file.write('\n')
+    # Particle kinematic acceptance, read from config.yaml so it tracks the real cuts.
+    # ptnq_* are per-quark (pT/n_q); pions use n_q=2, (anti)protons n_q=3.
+    try:
+        _cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config.yaml')
+        with open(_cfg_path) as _cf:
+            _cfg = yaml.safe_load(_cf)
+        _ycut = _cfg['eta_cut']
+        _e0 = next(iter(_cfg['ptnq_lo']))
+        _pt_lo_nq, _pt_hi_nq = _cfg['ptnq_lo'][_e0], _cfg['ptnq_hi'][_e0]
+        kin_text = '\n'.join([
+            r'$|y| < %g$' % _ycut,
+            r'$%.2f < p_{T}^{\pi} < %.2f$ GeV/$c$' % (_pt_lo_nq * 2, _pt_hi_nq * 2),
+            r'$%.2f < p_{T}^{\bar{p}} < %.2f$ GeV/$c$' % (_pt_lo_nq * 3, _pt_hi_nq * 3),
+        ])
+        ax_coal[7].annotate('Au+Au', xy=(0.5, 0.95 if slide else 0.92), xycoords='axes fraction',
+                            ha='center', va='top', fontsize=fs(15))
+        ax_coal[7].annotate(kin_text, xy=(0.5, 0.83 if slide else 0.76), xycoords='axes fraction',
+                            ha='center', va='top', fontsize=fs(11) if slide else 13)
+    except Exception as _e:
+        print(f'[plot_ratio] could not add kinematic annotation: {_e}')
+
+    # print result to txt (the slide pass plots the same numbers, so it is skipped)
+    if not slide:
+        with open(paper_plot_path + '/ratio.txt', 'w') as file:
+            for i, f in enumerate(files['TPC']):
+                energy = f.split('/')[-2].split('_')[1].replace('p', '.')
+                file.write(f'AuAu, {energy}\n')
+                for EP in ['TPC', 'EPD']:
+                    file.write(f'{EP}\n')
+                    with open(files[EP][i], 'r') as f:
+                        data_dict = yaml.load(f, Loader=yaml.CLoader)
+                    x = np.array(data_dict['x'])
+                    ratio = unumpy.uarray(data_dict['y'], data_dict['yerr'])
+                    for j in range(len(x)):
+                        file.write(f'{x[j]:.2f} {unumpy.nominal_values(ratio)[j]:.4f}+-{unumpy.std_devs(ratio)[j]:.4f}\n')
+                file.write('\n')
     plt.figure(fig_coal.number)
     ratio_pdf = paper_plot_path + '/ratio.pdf'
-    if os.path.exists(ratio_pdf):
+    if not slide and os.path.exists(ratio_pdf):
         shutil.copyfile(ratio_pdf, paper_plot_path + '/ratio_old.pdf')
-    plt.savefig(ratio_pdf)
-    plt.savefig(paper_plot_path + '/ratio.eps', format='eps')
-    plt.savefig(paper_plot_path + '/ratio.svg', format='svg', transparent = True, bbox_inches = 'tight', pad_inches = 0)
-    figs.append(fig_coal)
+    save_figure(paper_plot_path + '/ratio', slide,
+                svg_kwargs=dict(transparent=True, bbox_inches='tight', pad_inches=0))
+    if not slide:
+        figs.append(fig_coal)
     plt.close()
     return figs
 
@@ -656,7 +731,8 @@ def plot_ratio_one_energy(dict_input, figs, paper_plot_path):
     return figs
 
 
-def plot_energy_dep(dict_input, figs, paper_plots_path):
+def plot_energy_dep(dict_input, figs, paper_plots_path, unmask_epd=False, slide=False):
+    fs, tick = slide_style(slide)
     # remove isobar files
     files = {}
     _energy_key = lambda f: float(f.split('/')[-2].split('_')[1].replace('p', '.').replace('GeV', ''))
@@ -665,7 +741,9 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
             [f for f in dict_input['ratio'] if f.split('/')[-1].split('_')[1].startswith(EP) and not f.split('/')[-2].split('_')[1].startswith('isobar')],
             key=_energy_key
         )
-    fig_dep, ax_dep = plt.subplots(figsize=(8, 6))
+    # slides get a wider canvas: the beam-energy x ticks (7.7/9.2 ...) are already
+    # tight at paper font size and would collide once the labels grow
+    fig_dep, ax_dep = plt.subplots(figsize=(11, 7) if slide else (8, 6))
 
     ratio_1040 = {}
     ratio_1040['TPC'] = np.zeros(len(files['TPC'])) * ufloat(0, 0)
@@ -693,15 +771,16 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     # we want to shift the markers to avoid overlap
     # but we are plotting the x-axis in log scale, so we need to shift the markers in log scale
     shift = 0.2 # multiply or divide by 1.5
-    ax_dep.errorbar(energy_float + shift, unumpy.nominal_values(ratio_1040['TPC']), unumpy.std_devs(ratio_1040['TPC']), fmt='o', label='TPC', capsize=2, ms=8)
+    ax_dep.errorbar(energy_float + shift, unumpy.nominal_values(ratio_1040['TPC']), unumpy.std_devs(ratio_1040['TPC']), label='TPC', **marker_styles['TPC'])
     for j in range(len(energy_float)):
         ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) + shift, 
                             unumpy.nominal_values(ratio_1040['TPC'])[j]-err_sys_1040['TPC'][j], unumpy.nominal_values(ratio_1040['TPC'])[j]+err_sys_1040['TPC'][j], color='C0', alpha=0.3)
-    # for EPD, show only 14.6 GeV and above
-    ax_dep.errorbar((energy_float - shift)[energy_float >= 14.6], unumpy.nominal_values(ratio_1040['EPD'])[energy_float >= 14.6], unumpy.std_devs(ratio_1040['EPD'])[energy_float >= 14.6], fmt='o', label='EPD', capsize=2, ms=8)
+    # for EPD, show only 14.6 GeV and above (unmask_epd -> show every energy)
+    epd_show = np.ones(len(energy_float), dtype=bool) if unmask_epd else (energy_float >= 14.6)
+    ax_dep.errorbar((energy_float - shift)[epd_show], unumpy.nominal_values(ratio_1040['EPD'])[epd_show], unumpy.std_devs(ratio_1040['EPD'])[epd_show], label='EPD', **marker_styles['EPD'])
     for j in range(len(energy_float)):
-        if energy_float[j] >= 14.6:
-            ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) - shift, 
+        if epd_show[j]:
+            ax_dep.fill_between(np.array([energy_float[j]-0.5, energy_float[j]+0.5]) - shift,
                                 unumpy.nominal_values(ratio_1040['EPD'])[j]-err_sys_1040['EPD'][j], unumpy.nominal_values(ratio_1040['EPD'])[j]+err_sys_1040['EPD'][j], color='C1', alpha=0.3)
     # chi2/ndf comparing to expectation 315/276, using FULL uncertainty with the
     # cross-energy systematic covariance V = diag(stat^2) + V_sys, where
@@ -731,7 +810,7 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
 
     tpc_all = np.ones(len(energy_float), dtype=bool)
     tpc_no77 = tpc_all & (np.abs(energy_float - 7.7) > 0.05)
-    epd_mask = energy_float >= 14.6
+    epd_mask = np.ones(len(energy_float), dtype=bool) if unmask_epd else (energy_float >= 14.6)
     masks = [('TPC', 'TPC', tpc_all),
              ('TPC excl 7.7', 'TPC', tpc_no77),
              ('EPD', 'EPD', epd_mask)]
@@ -743,19 +822,22 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
         print(f'energy_dep chi2/ndf ({tag} vs 315/276): '
               f'diagonal {cd:.2f}/{n}={cd/n:.2f}  |  covariance {cc:.2f}/{n}={cc/n:.2f}')
 
-    ax_dep.annotate(fr'TPC $\chi^2$/ndf = {chi2_res["TPC"][0]:.1f}/{chi2_res["TPC"][1]}', xy=(0.05, 0.82), fontsize=13, xycoords='axes fraction')
-    ax_dep.annotate(fr'TPC (excl. 7.7 GeV) $\chi^2$/ndf = {chi2_res["TPC excl 7.7"][0]:.1f}/{chi2_res["TPC excl 7.7"][1]}', xy=(0.05, 0.74), fontsize=13, xycoords='axes fraction')
-    ax_dep.annotate(fr'EPD $\chi^2$/ndf = {chi2_res["EPD"][0]:.1f}/{chi2_res["EPD"][1]}', xy=(0.05, 0.66), fontsize=13, xycoords='axes fraction')
+    # the chi2 block is three stacked lines; keep it a touch smaller than the rest on slides
+    ax_dep.annotate(fr'TPC $\chi^2$/ndf = {chi2_res["TPC"][0]:.1f}/{chi2_res["TPC"][1]}', xy=(0.05, 0.855), fontsize=fs(11), xycoords='axes fraction')
+    ax_dep.annotate(fr'TPC (excl. 7.7 GeV) $\chi^2$/ndf = {chi2_res["TPC excl 7.7"][0]:.1f}/{chi2_res["TPC excl 7.7"][1]}', xy=(0.05, 0.80), fontsize=fs(11), xycoords='axes fraction')
+    ax_dep.annotate(fr'EPD $\chi^2$/ndf = {chi2_res["EPD"][0]:.1f}/{chi2_res["EPD"][1]}', xy=(0.05, 0.745), fontsize=fs(11), xycoords='axes fraction')
 
-    ax_dep.annotate(r'AuAu, 10-40%', xy=(0.05, 0.9), fontsize=15, xycoords='axes fraction', horizontalalignment='left')
-    ax_dep.set_xlabel(r'$\sqrt{s_{\text{NN}}}$ (GeV)', fontsize=15)
-    ax_dep.set_ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=15)
+    ax_dep.annotate(r'AuAu, 10-40%', xy=(0.05, 0.92), fontsize=fs(14), xycoords='axes fraction', horizontalalignment='left')
+    ax_dep.set_xlabel(r'$\sqrt{s_{\text{NN}}}$ (GeV)', fontsize=fs(15))
+    ax_dep.set_ylabel(r'$\frac{v_2^{\pi^-}-\frac{2}{3}v_2^{\bar{p}}}{v_2^{\pi^+}-\frac{2}{3}v_2^{\bar{p}}}$', fontsize=fs(15))
+    tick(ax_dep)
 
-    # print results to txt
-    with open(paper_plots_path + '/energy_dep.txt', 'w') as f:
-        for i, energy in enumerate(energy_str):
-            f.write(f'{energy} {unumpy.nominal_values(ratio_1040["TPC"])[i]:.4f} {unumpy.std_devs(ratio_1040["TPC"])[i]:.4f} {unumpy.nominal_values(ratio_1040["EPD"])[i]:.4f} {unumpy.std_devs(ratio_1040["EPD"])[i]:.4f}\n')
-    
+    # print results to txt (skipped on the slide pass, same numbers as the paper pass)
+    if not slide:
+        with open(paper_plots_path + '/energy_dep.txt', 'w') as f:
+            for i, energy in enumerate(energy_str):
+                f.write(f'{energy} {unumpy.nominal_values(ratio_1040["TPC"])[i]:.4f} {unumpy.std_devs(ratio_1040["TPC"])[i]:.4f} {unumpy.nominal_values(ratio_1040["EPD"])[i]:.4f} {unumpy.std_devs(ratio_1040["EPD"])[i]:.4f}\n')
+
     # ax_dep.set_xscale('log')
     ax_dep.set_xticks(energy_float, labels=energy_float)
     ax_dep.set_xlim(5, 30)
@@ -763,15 +845,14 @@ def plot_energy_dep(dict_input, figs, paper_plots_path):
     lb, rb = ax_dep.get_xlim()
     ax_dep.hlines(315 / 276, lb, rb, color='C3', linestyle='--', label='315/276')
     # ax_dep.hlines(1, lb, rb, color='C4', linestyle='--', label='1')
-    ax_dep.legend(fontsize=15)
+    ax_dep.legend(fontsize=fs(15))
     # make a copy of the plot from the previous iteration
     energy_dep_pdf = paper_plots_path + '/energy_dep.pdf'
-    if os.path.exists(energy_dep_pdf):
+    if not slide and os.path.exists(energy_dep_pdf):
         shutil.copyfile(energy_dep_pdf, paper_plots_path + '/energy_dep_old.pdf')
-    plt.savefig(energy_dep_pdf)
-    plt.savefig(paper_plots_path + '/energy_dep.eps', format='eps')
-    plt.savefig(paper_plots_path + '/energy_dep.svg', format='svg')
-    figs.append(fig_dep)
+    save_figure(paper_plots_path + '/energy_dep', slide)
+    if not slide:
+        figs.append(fig_dep)
     plt.close()
     return figs
 
@@ -1129,21 +1210,27 @@ def calculate_chi2_per_ndf(data_points, model_points, nparams):
     return chi2
 
 
-def main(dict_input, output_file=None):
+def main(dict_input, output_file=None, unmask_epd=False):
     paper_plots_path = os.path.dirname(output_file)
     figs = []
 
-    figs = plot_res(dict_input, figs, paper_plots_path)
-    figs = plot_pion_v2(dict_input, figs, paper_plots_path)
+    figs = plot_res(dict_input, figs, paper_plots_path, unmask_epd=unmask_epd)
+    figs = plot_pion_v2(dict_input, figs, paper_plots_path, unmask_epd=unmask_epd)
     figs = plot_efficiency_comparison(dict_input, figs, paper_plots_path)
     figs = plot_ratio(dict_input, figs, paper_plots_path)
     figs = plot_ratio_one_energy(dict_input, figs, paper_plots_path)
     figs = plot_alternative_ratio(dict_input, figs, paper_plots_path)
     figs = plot_alternative_ratio_integrated(dict_input, figs, paper_plots_path)
-    figs = plot_energy_dep(dict_input, figs, paper_plots_path)
+    figs = plot_energy_dep(dict_input, figs, paper_plots_path, unmask_epd=unmask_epd)
     figs = plot_energy_dep_lambda(dict_input, figs, paper_plots_path)
     figs = plot_isobar_test(dict_input, figs, paper_plots_path)
     figs = neutron_skin_alpha_test(dict_input, figs, paper_plots_path)
+
+    # presentation versions of the three headline plots: identical content, larger
+    # text/ticks, written as *_slide.pdf/.png and kept out of report.pdf
+    plot_pion_v2(dict_input, figs, paper_plots_path, unmask_epd=unmask_epd, slide=True)
+    plot_ratio(dict_input, figs, paper_plots_path, slide=True)
+    plot_energy_dep(dict_input, figs, paper_plots_path, unmask_epd=unmask_epd, slide=True)
 
     if output_file is not None:
         pdf = matplotlib.backends.backend_pdf.PdfPages(output_file)
@@ -1160,6 +1247,8 @@ if __name__ == '__main__':
     parser.add_argument('--input_v2', type=str, nargs='+')
     parser.add_argument('--input_v2_eff', type=str, nargs='+')
     parser.add_argument('--output', type=str, help='a pdf report that includes all generated plots')
+    parser.add_argument('--unmask_epd', action='store_true',
+                        help='show EPD points at every energy/centrality (drop the >=14.6 GeV and 0.05-resolution gates); use for the 1st-order spectator plane')
     args = parser.parse_args()
 
     delta_v2_files = {}
@@ -1176,5 +1265,5 @@ if __name__ == '__main__':
         delta_v2_files_isobar['pi'][system]['EPD'] = [f for f in args.input_delta_v2_isobar if f.split('/')[-2].split('energy_')[1] == f'isobar_{system}' and 'EPD' in f and 'pi' in f]
     dict_input = {'res': args.input_res, 'v2': args.input_v2, 'ratio': args.input_ratio,
                   'v2_eff': args.input_v2_eff, 'delta_v2': delta_v2_files, 'delta_v2_isobar': delta_v2_files_isobar}
-    main(dict_input, args.output)
+    main(dict_input, args.output, unmask_epd=args.unmask_epd)
 

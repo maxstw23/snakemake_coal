@@ -4,6 +4,16 @@ import yaml
 import matplotlib.pyplot as plt
 
 
+def _parse_sys_tag(path):
+    # Locate the "sys_tag_<N>" path component by name (position-independent), so
+    # this works for both plots/sys_tag_<N>/... and plots/<plane>/sys_tag_<N>/...
+    for part in path.split('/'):
+        if part.startswith('sys_tag_'):
+            return part[len('sys_tag_'):]
+    # Fallback: original behaviour (second path component, trailing token)
+    return path.split('/')[1].split('_')[-1]
+
+
 def main(default, regular_sys, special_sys, output, energy):
     with open (default, 'r') as f:
         default_cut = yaml.load(f, Loader=yaml.CLoader)
@@ -12,13 +22,13 @@ def main(default, regular_sys, special_sys, output, energy):
         if not regular_sys[0].startswith('result/blank/'):
             for sys in regular_sys:
                 with open (sys, 'r') as f:
-                    sys_tag = sys.split('/')[1].split('_')[-1]
+                    sys_tag = _parse_sys_tag(sys)
                     sys_cut[sys_tag] = yaml.load(f, Loader=yaml.CLoader)
 
     if special_sys is not None:
         for sys in special_sys:
             with open (sys, 'r') as f:
-                sys_tag = sys.split('/')[1].split('_')[-1]
+                sys_tag = _parse_sys_tag(sys)
                 sys_cut[sys_tag] = yaml.load(f, Loader=yaml.CLoader)
 
     # iterate thru the centralities

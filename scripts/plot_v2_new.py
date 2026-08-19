@@ -75,7 +75,7 @@ def ratio_toymc(num, den, n_toy=100000, seed=0):
         sf[i]  = np.mean(np.sign(s[:, 1]) != np.sign(Di.n))
     return med, elo, ehi, sf
 
-def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, energy, yrange):
+def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, energy, yrange, unmask_epd=False):
     df = pd.read_csv(inputFile)
     df_cen = [pd.read_csv(inputFile.replace('.csv', f'_cen{i+1}.csv')) for i in range(9)]
     df_res = pd.read_csv(resFile)
@@ -128,6 +128,11 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         '27GeV': {'EPD': [1]},
     }
 
+    # unmask_epd (e.g. 1st-order spectator plane): drop all hardcoded EPD bin masks
+    # so every EPD centrality point is computed/shown (TPC masks left as-is).
+    if unmask_epd:
+        masked_bins = {e: {ep: b for ep, b in d.items() if ep != 'EPD'} for e, d in masked_bins.items()}
+
     fig_c, ax_c = plt.subplots(1, 1, figsize=(8, 6))
     fig_dpi, ax_dpi = plt.subplots(1, 1, figsize=(8, 6))
     fig_dp, ax_dp = plt.subplots(1, 1, figsize=(8, 6))
@@ -156,7 +161,7 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
             piplus_v2_merged[cb] = ufloat(-999, 999)
             piminus_v2_merged[cb] = ufloat(-999, 999)
             antiproton_v2_merged[cb] = ufloat(-999, 999)
-            if EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
+            if unmask_epd or EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
                 piplus_v2_merged[cb] = np.sum(piplus_v2[cen_bins_correspondence[cb]-1] * piplus_counts[cen_bins_correspondence[cb]-1]) / np.sum(piplus_counts[cen_bins_correspondence[cb]-1])
                 piminus_v2_merged[cb] = np.sum(piminus_v2[cen_bins_correspondence[cb]-1] * piminus_counts[cen_bins_correspondence[cb]-1]) / np.sum(piminus_counts[cen_bins_correspondence[cb]-1])
                 antiproton_v2_merged[cb] = np.sum(antiproton_v2[cen_bins_correspondence[cb]-1] * antiproton_counts[cen_bins_correspondence[cb]-1]) / np.sum(antiproton_counts[cen_bins_correspondence[cb]-1])
@@ -271,7 +276,7 @@ def main(inputFile, inputFile_lambda, inputFile_lambdabar, resFile, outputDir, e
         ratio_merged = {}
         for cb in cen_bins_correspondence.keys():
             ratio_merged[cb] = ufloat(-999, 999)
-            if EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
+            if unmask_epd or EP != 'EPD' or energy not in ['7.7GeV', '9.2GeV', '11.5GeV']:
                 ratio_merged[cb] = (piminus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.) / (piplus_v2_merged[cb] - antiproton_v2_merged[cb] * 2. / 3.)
 
         ax_coal[2].errorbar(cen, r_med, yerr=[r_lo, r_hi], fmt='o', ls='none',
@@ -813,7 +818,9 @@ if __name__ == '__main__':
     parser.add_argument('outputDir', type=str, help='Output directory for the figures')
     parser.add_argument('energy', type=str, help='Energy')
     parser.add_argument('yrange', type=none_or_float, nargs='+', help='Y range for the ratio plot')
+    parser.add_argument('--unmask_epd', action='store_true',
+                        help='compute/show EPD ratio at every energy and centrality (drop the hardcoded low-energy EPD masks); use for the 1st-order spectator plane')
     args = parser.parse_args()
     if len(args.yrange) > 2:
         raise ValueError('Too many arguments for yrange')
-    main(args.inputFile, args.inputFile_lambda, args.inputFile_lambdabar, args.resFile, args.outputDir, args.energy, args.yrange)
+    main(args.inputFile, args.inputFile_lambda, args.inputFile_lambdabar, args.resFile, args.outputDir, args.energy, args.yrange, unmask_epd=args.unmask_epd)

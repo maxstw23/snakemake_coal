@@ -76,8 +76,8 @@ def gen_pion_v2():
             res = df_res[f'{EP}_res'].values
             res_err = df_res[f'{EP}_res_err'].values
 
-            # Build mask of valid bins
-            mask = res >= 0.05
+            # Build mask of valid bins (consistent with zero at 2σ)
+            mask = (res - 2. * res_err) > 0.
             if energy == '7p7GeV' and EP == 'TPC':
                 mask[0] = False
             mask &= ~np.isnan(res)

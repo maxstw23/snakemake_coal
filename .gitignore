@@ -1,8 +1,18 @@
 /.snakemake
 /.vscode
-/data
+/backup
 /debug
 /logs
 /plots
 /result
 /temp
+
+# Upstream productions: the trimmed result*.root files under data/ ARE tracked
+# (see scripts/slim_result_files.py); the raw originals live in backup/ and the
+# embedding sample is too large for git.
+/data/embedding
+
+# Python bytecode and snakemake scratch
+__pycache__/
+*.pyc
+/tmp
